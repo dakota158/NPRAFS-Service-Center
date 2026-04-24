@@ -110,7 +110,7 @@ function Dashboard({ user, onLogout }) {
           </div>
 
           <div className="content-card">
-            {activeTab === "Dashboard" && <DashboardHome />}
+            {activeTab === "Dashboard" && <DashboardHome user={user} />}
 
             {activeTab === "Orders" && (
               <OrdersManager user={user} canEditEverything={canEditEverything} />
@@ -121,11 +121,17 @@ function Dashboard({ user, onLogout }) {
             )}
 
             {activeTab === "History" && (
-              <HistoryManager canEditEverything={canEditEverything} />
+              <HistoryManager
+                user={user}
+                canEditEverything={canEditEverything}
+              />
             )}
 
             {activeTab === "Suppliers" && (
-              <SuppliersManager user={user} canEditEverything={canEditEverything} />
+              <SuppliersManager
+                user={user}
+                canEditEverything={canEditEverything}
+              />
             )}
 
             {activeTab === "User Management" && canViewAdminTabs && (

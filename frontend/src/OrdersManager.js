@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 
+function canViewMoney(user) {
+  const role = user?.role || "Tech";
+  return role === "Manager" || role === "IT" || role === "admin" || role === "Admin";
+}
+
 function OrdersManager({ user, canEditEverything }) {
+  const showMoney = canViewMoney(user);
+
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [message, setMessage] = useState("");
@@ -12,8 +19,6 @@ function OrdersManager({ user, canEditEverything }) {
     partNumber: "",
     partDescriptionSeller: "",
     quantity: "",
-    cost: "",
-    net: "",
     dateApproved: "",
     repairOrderNumber: "",
     supplierId: ""
@@ -22,6 +27,8 @@ function OrdersManager({ user, canEditEverything }) {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [orderedBy, setOrderedBy] = useState("");
   const [dateOrdered, setDateOrdered] = useState("");
+  const [orderedPaid, setOrderedPaid] = useState("");
+  const [orderedCharged, setOrderedCharged] = useState("");
 
   const [receiveOrder, setReceiveOrder] = useState(null);
   const [testedGood, setTestedGood] = useState(false);
@@ -48,15 +55,10 @@ function OrdersManager({ user, canEditEverything }) {
   };
 
   const loadSuppliers = async () => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("suppliers")
       .select("*")
       .order("name", { ascending: true });
-
-    if (error) {
-      console.error("Supplier load error:", error);
-      return;
-    }
 
     setSuppliers(data || []);
   };
@@ -84,15 +86,11 @@ function OrdersManager({ user, canEditEverything }) {
       partNumber: "",
       partDescriptionSeller: "",
       quantity: "",
-      cost: "",
-      net: "",
       dateApproved: "",
       repairOrderNumber: "",
       supplierId: ""
     });
   };
-
-  const calculatedProfit = Number(form.net || 0) - Number(form.cost || 0);
 
   const openAddPopup = () => {
     setMessage("");
@@ -112,28 +110,29 @@ function OrdersManager({ user, canEditEverything }) {
       !form.partNumber ||
       !form.partDescriptionSeller ||
       !form.quantity ||
-      form.cost === "" ||
-      form.net === "" ||
       !form.dateApproved ||
       !form.repairOrderNumber
     ) {
-      setMessage("All order fields are required except supplier.");
+      setMessage("Part number, description, quantity, date approved, and repair order number are required.");
       return;
     }
 
-    const paid = Number(form.cost);
-    const charged = Number(form.net);
-    const profit = charged - paid;
+    const qty = Number(form.quantity);
+
+    if (!qty || qty <= 0) {
+      setMessage("Quantity must be greater than 0.");
+      return;
+    }
 
     const { data, error } = await supabase
       .from("orders")
       .insert({
         part_number: form.partNumber,
         part_description_seller: form.partDescriptionSeller,
-        quantity: Number(form.quantity),
-        cost: paid,
-        net: charged,
-        profit: profit,
+        quantity: qty,
+        cost: 0,
+        net: 0,
+        profit: 0,
         date_approved: form.dateApproved,
         repair_order_number: form.repairOrderNumber,
         supplier_id: form.supplierId || null,
@@ -143,7 +142,10 @@ function OrdersManager({ user, canEditEverything }) {
         received: false,
         tested_good: false,
         tested_by: "",
-        received_date: null
+        received_date: null,
+        created_by: user?.id || null,
+        created_by_email: user?.email || "",
+        created_by_name: user?.username || user?.name || user?.email || ""
       })
       .select()
       .single();
@@ -168,19 +170,46 @@ function OrdersManager({ user, canEditEverything }) {
     setSelectedOrder(order);
     setOrderedBy(user?.username || user?.email || "");
     setDateOrdered("");
+    setOrderedPaid(order.cost ? String(order.cost) : "");
+    setOrderedCharged(order.net ? String(order.net) : "");
   };
 
   const closeOrderedPopup = () => {
     setSelectedOrder(null);
     setOrderedBy("");
     setDateOrdered("");
+    setOrderedPaid("");
+    setOrderedCharged("");
   };
+
+  const orderedProfit =
+    selectedOrder
+      ? (Number(orderedCharged || 0) - Number(orderedPaid || 0)) *
+        Number(selectedOrder.quantity || 0)
+      : 0;
 
   const markOrdered = async () => {
     if (!selectedOrder) return;
 
+    setMessage("");
+
     if (!orderedBy || !dateOrdered) {
-      setMessage("Ordered by and date ordered are required");
+      setMessage("Ordered by and date ordered are required.");
+      return;
+    }
+
+    if (orderedPaid === "" || orderedCharged === "") {
+      setMessage("What we paid and what we charged are required when confirming ordered.");
+      return;
+    }
+
+    const paid = Number(orderedPaid);
+    const charged = Number(orderedCharged);
+    const qty = Number(selectedOrder.quantity || 0);
+    const profit = (charged - paid) * qty;
+
+    if (paid < 0 || charged < 0) {
+      setMessage("Financial amounts cannot be negative.");
       return;
     }
 
@@ -189,7 +218,10 @@ function OrdersManager({ user, canEditEverything }) {
       .update({
         part_ordered: true,
         ordered_by: orderedBy,
-        date_ordered: dateOrdered
+        date_ordered: dateOrdered,
+        cost: paid,
+        net: charged,
+        profit
       })
       .eq("id", selectedOrder.id);
 
@@ -202,7 +234,7 @@ function OrdersManager({ user, canEditEverything }) {
       "Order Marked Ordered",
       "orders",
       selectedOrder.id,
-      `Marked ${selectedOrder.part_number} ordered by ${orderedBy}`
+      `Marked ${selectedOrder.part_number} ordered by ${orderedBy}. Paid ${paid}, charged ${charged}, total profit ${profit}.`
     );
 
     closeOrderedPopup();
@@ -224,8 +256,10 @@ function OrdersManager({ user, canEditEverything }) {
   const markReceived = async () => {
     if (!receiveOrder) return;
 
+    setMessage("");
+
     if (!testedBy) {
-      setMessage("Tested by is required");
+      setMessage("Tested by is required.");
       return;
     }
 
@@ -252,7 +286,10 @@ function OrdersManager({ user, canEditEverything }) {
       date_received: receivedDate,
       source_order_id: receiveOrder.id,
       part_number: receiveOrder.part_number,
-      repair_order_number: receiveOrder.repair_order_number
+      repair_order_number: receiveOrder.repair_order_number,
+      created_by: receiveOrder.created_by || null,
+      created_by_email: receiveOrder.created_by_email || "",
+      created_by_name: receiveOrder.created_by_name || ""
     });
 
     if (partError) {
@@ -274,10 +311,7 @@ function OrdersManager({ user, canEditEverything }) {
   const deleteOrder = async (order) => {
     if (!canEditEverything) return;
 
-    const confirmed = window.confirm(
-      `Delete order request for ${order.part_number}?`
-    );
-
+    const confirmed = window.confirm(`Delete order request for ${order.part_number}?`);
     if (!confirmed) return;
 
     const { error } = await supabase.from("orders").delete().eq("id", order.id);
@@ -316,11 +350,12 @@ function OrdersManager({ user, canEditEverything }) {
             <th>Description</th>
             <th>Supplier / Vendor</th>
             <th>Qty</th>
-            <th>What We Paid</th>
-            <th>What We Charged</th>
-            <th>Profit</th>
+            {showMoney && <th>What We Paid</th>}
+            {showMoney && <th>What We Charged</th>}
+            {showMoney && <th>Profit</th>}
             <th>Date Approved</th>
             <th>RO #</th>
+            <th>Requested By</th>
             <th>Ordered?</th>
             <th>Date Ordered</th>
             <th>Ordered By</th>
@@ -330,24 +365,29 @@ function OrdersManager({ user, canEditEverything }) {
 
         <tbody>
           {orders.map((order) => {
+            const qty = Number(order.quantity || 0);
             const paid = Number(order.cost || 0);
             const charged = Number(order.net || 0);
-            const profit = charged - paid;
+            const profit = (charged - paid) * qty;
 
             return (
               <tr key={order.id}>
                 <td>{order.part_number || "-"}</td>
                 <td>{order.part_description_seller || "-"}</td>
                 <td>{order.suppliers?.name || "-"}</td>
-                <td>{order.quantity || 0}</td>
-                <td>${paid.toFixed(2)}</td>
-                <td>${charged.toFixed(2)}</td>
-                <td>${profit.toFixed(2)}</td>
+                <td>{qty}</td>
+
+                {showMoney && <td>${paid.toFixed(2)}</td>}
+                {showMoney && <td>${charged.toFixed(2)}</td>}
+                {showMoney && <td>${profit.toFixed(2)}</td>}
+
                 <td>{order.date_approved || "-"}</td>
                 <td>{order.repair_order_number || "-"}</td>
+                <td>{order.created_by_name || order.created_by_email || "-"}</td>
                 <td>{order.part_ordered ? "Yes" : "No"}</td>
                 <td>{order.date_ordered || "-"}</td>
                 <td>{order.ordered_by || "-"}</td>
+
                 <td>
                   {!order.part_ordered && (
                     <button onClick={() => openOrderedPopup(order)}>
@@ -379,7 +419,7 @@ function OrdersManager({ user, canEditEverything }) {
 
           {orders.length === 0 && (
             <tr>
-              <td colSpan="13" style={{ textAlign: "center" }}>
+              <td colSpan={showMoney ? 14 : 11} style={{ textAlign: "center" }}>
                 No active orders found.
               </td>
             </tr>
@@ -402,9 +442,7 @@ function OrdersManager({ user, canEditEverything }) {
             <input
               placeholder="Part Description / Seller"
               value={form.partDescriptionSeller}
-              onChange={(e) =>
-                updateForm("partDescriptionSeller", e.target.value)
-              }
+              onChange={(e) => updateForm("partDescriptionSeller", e.target.value)}
               style={inputStyle}
             />
 
@@ -429,36 +467,6 @@ function OrdersManager({ user, canEditEverything }) {
               style={inputStyle}
             />
 
-            <input
-              type="number"
-              step="0.01"
-              placeholder="What We Paid"
-              value={form.cost}
-              onChange={(e) => updateForm("cost", e.target.value)}
-              style={inputStyle}
-            />
-
-            <input
-              type="number"
-              step="0.01"
-              placeholder="What We Charged"
-              value={form.net}
-              onChange={(e) => updateForm("net", e.target.value)}
-              style={inputStyle}
-            />
-
-            <div
-              style={{
-                padding: 10,
-                background: "#f1f5f9",
-                border: "1px solid #cbd5e1",
-                borderRadius: 8,
-                marginBottom: 8
-              }}
-            >
-              <strong>Auto Profit:</strong> ${calculatedProfit.toFixed(2)}
-            </div>
-
             <label>
               Date Approved
               <input
@@ -472,9 +480,7 @@ function OrdersManager({ user, canEditEverything }) {
             <input
               placeholder="Repair Order #"
               value={form.repairOrderNumber}
-              onChange={(e) =>
-                updateForm("repairOrderNumber", e.target.value)
-              }
+              onChange={(e) => updateForm("repairOrderNumber", e.target.value)}
               style={inputStyle}
             />
 
@@ -495,6 +501,10 @@ function OrdersManager({ user, canEditEverything }) {
               <strong>Part:</strong> {selectedOrder.part_number || "-"}
             </p>
 
+            <p>
+              <strong>Quantity:</strong> {selectedOrder.quantity || 0}
+            </p>
+
             <label>
               Date Ordered
               <input
@@ -511,6 +521,36 @@ function OrdersManager({ user, canEditEverything }) {
               onChange={(e) => setOrderedBy(e.target.value)}
               style={inputStyle}
             />
+
+            <input
+              type="number"
+              step="0.01"
+              placeholder="What We Paid Per Part"
+              value={orderedPaid}
+              onChange={(e) => setOrderedPaid(e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="number"
+              step="0.01"
+              placeholder="What We Charged Per Part"
+              value={orderedCharged}
+              onChange={(e) => setOrderedCharged(e.target.value)}
+              style={inputStyle}
+            />
+
+            <div
+              style={{
+                padding: 10,
+                background: "#f1f5f9",
+                border: "1px solid #cbd5e1",
+                borderRadius: 8,
+                marginBottom: 8
+              }}
+            >
+              <strong>Auto Profit:</strong> ${orderedProfit.toFixed(2)}
+            </div>
 
             <button onClick={markOrdered}>Save Ordered</button>
             <button onClick={closeOrderedPopup} style={{ marginLeft: 8 }}>

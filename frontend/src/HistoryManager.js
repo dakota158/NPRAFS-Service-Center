@@ -1,247 +1,130 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 
-function HistoryManager({ canEditEverything }) {
+function canViewMoney(role) {
+  return role === "Manager" || role === "IT" || role === "admin" || role === "Admin";
+}
+
+function canDeleteHistory(role) {
+  return role === "IT" || role === "admin" || role === "Admin";
+}
+
+function HistoryManager({ user }) {
+  const role = user?.role || "Tech";
+  const showMoney = canViewMoney(role);
+  const allowDelete = canDeleteHistory(role);
+
   const [history, setHistory] = useState([]);
   const [message, setMessage] = useState("");
-  const [search, setSearch] = useState("");
-
-  const loadHistory = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("history")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-
-      setHistory(data || []);
-      setMessage("");
-    } catch (err) {
-      console.error(err);
-      setMessage(String(err.message || err));
-    }
-  };
 
   useEffect(() => {
     loadHistory();
   }, []);
 
-  const deleteHistory = async (id) => {
-    if (!canEditEverything) return;
+  const loadHistory = async () => {
+    const { data, error } = await supabase
+      .from("history")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-    try {
-      const { error } = await supabase.from("history").delete().eq("id", id);
-
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-
-      loadHistory();
-    } catch (err) {
-      console.error(err);
-      setMessage(String(err.message || err));
+    if (error) {
+      setMessage(error.message);
+      return;
     }
+
+    setHistory(data || []);
   };
 
-  const getPaid = (item) => Number(item.cost || 0);
-  const getCharged = (item) => Number(item.net || 0);
-  const getProfit = (item) => getCharged(item) - getPaid(item);
+  const deleteHistory = async (item) => {
+    if (!allowDelete) {
+      setMessage("Only Admin and IT accounts can delete history.");
+      return;
+    }
 
-  const filteredHistory = useMemo(() => {
-    const text = search.toLowerCase();
+    const confirmed = window.confirm(
+      `Delete history record for ${item.part_number || "this part"}?`
+    );
 
-    return history.filter((item) => {
-      const paid = getPaid(item);
-      const charged = getCharged(item);
-      const profit = getProfit(item);
+    if (!confirmed) return;
 
-      const searchable = [
-        item.part_number,
-        item.part_description_seller,
-        item.quantity,
-        paid,
-        charged,
-        profit,
-        item.date_approved,
-        item.repair_order_number,
-        item.ordered_by,
-        item.date_ordered,
-        item.tested_by,
-        item.received_date,
-        item.used_date,
-        item.installed_by,
-        item.source_order_id ? "repair order part" : "stock inventory",
-        "what we paid",
-        "what we charged",
-        "profit"
-      ]
-        .join(" ")
-        .toLowerCase();
+    const { error } = await supabase
+      .from("history")
+      .delete()
+      .eq("id", item.id);
 
-      return searchable.includes(text);
-    });
-  }, [history, search]);
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
 
-  const totalQuantity = filteredHistory.reduce(
-    (sum, item) => sum + Number(item.quantity || 0),
-    0
-  );
+    setMessage("History record deleted.");
+    loadHistory();
+  };
 
-  const totalPaid = filteredHistory.reduce(
-    (sum, item) => sum + getPaid(item),
-    0
-  );
-
-  const totalCharged = filteredHistory.reduce(
-    (sum, item) => sum + getCharged(item),
-    0
-  );
-
-  const totalProfit = filteredHistory.reduce(
-    (sum, item) => sum + getProfit(item),
-    0
-  );
+  const getProfit = (i) =>
+    (Number(i.net || 0) - Number(i.cost || 0)) *
+    Number(i.quantity || 0);
 
   return (
     <div>
       <h2>History</h2>
 
-      <input
-        placeholder="Search history by part, RO number, installed by, date, or stock inventory"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{
-          padding: 10,
-          width: "100%",
-          maxWidth: 650,
-          marginBottom: 20
-        }}
-      />
-
-      <div
-        style={{
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-          marginBottom: 20
-        }}
-      >
-        <SummaryCard title="Records" value={filteredHistory.length} />
-        <SummaryCard title="Quantity Used" value={totalQuantity} />
-        <SummaryCard title="What We Paid" value={`$${totalPaid.toFixed(2)}`} />
-        <SummaryCard title="What We Charged" value={`$${totalCharged.toFixed(2)}`} />
-        <SummaryCard title="Total Profit" value={`$${totalProfit.toFixed(2)}`} />
-      </div>
-
       {message && <p style={{ color: "red" }}>{message}</p>}
 
-      <table
-        border="1"
-        cellPadding="8"
-        style={{ borderCollapse: "collapse", width: "100%" }}
-      >
+      <table border="1" cellPadding="8" style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th>Source</th>
-            <th>Part #</th>
-            <th>Description / Seller</th>
-            <th>Qty Used</th>
-            <th>What We Paid</th>
-            <th>What We Charged</th>
-            <th>Profit</th>
-            <th>Date Approved</th>
+            <th>Part</th>
+            <th>Description</th>
+            <th>Qty</th>
+            {showMoney && <th>Paid Per Part</th>}
+            {showMoney && <th>Charged Per Part</th>}
+            {showMoney && <th>Total Profit</th>}
             <th>RO #</th>
-            <th>Ordered?</th>
-            <th>Date Ordered</th>
             <th>Ordered By</th>
-            <th>Received?</th>
-            <th>Tested Good?</th>
-            <th>Tested By</th>
-            <th>Date Received</th>
-            <th>Date Used</th>
             <th>Installed By</th>
-            {canEditEverything && <th>Actions</th>}
+            <th>Date Used</th>
+            {allowDelete && <th>Actions</th>}
           </tr>
         </thead>
 
         <tbody>
-          {filteredHistory.map((item) => {
-            const paid = getPaid(item);
-            const charged = getCharged(item);
-            const profit = getProfit(item);
+          {history.map((i) => (
+            <tr key={i.id}>
+              <td>{i.part_number || "-"}</td>
+              <td>{i.part_description_seller || "-"}</td>
+              <td>{i.quantity || 0}</td>
 
-            return (
-              <tr key={item.id}>
-                <td>{item.source_order_id ? "Repair Order Part" : "Stock Inventory"}</td>
-                <td>{item.part_number || "-"}</td>
-                <td>{item.part_description_seller || "-"}</td>
-                <td>{item.quantity || 0}</td>
-                <td>${paid.toFixed(2)}</td>
-                <td>${charged.toFixed(2)}</td>
-                <td>${profit.toFixed(2)}</td>
-                <td>{item.date_approved || "-"}</td>
-                <td>{item.repair_order_number || "-"}</td>
-                <td>{item.part_ordered ? "Yes" : "No"}</td>
-                <td>{item.date_ordered || "-"}</td>
-                <td>{item.ordered_by || "-"}</td>
-                <td>{item.received ? "Yes" : "No"}</td>
-                <td>{item.tested_good ? "Yes" : "No"}</td>
-                <td>{item.tested_by || "-"}</td>
+              {showMoney && <td>${Number(i.cost || 0).toFixed(2)}</td>}
+              {showMoney && <td>${Number(i.net || 0).toFixed(2)}</td>}
+              {showMoney && <td>${getProfit(i).toFixed(2)}</td>}
+
+              <td>{i.repair_order_number || "-"}</td>
+              <td>{i.ordered_by || "-"}</td>
+              <td>{i.installed_by || "-"}</td>
+              <td>
+                {i.used_date ? new Date(i.used_date).toLocaleString() : "-"}
+              </td>
+
+              {allowDelete && (
                 <td>
-                  {item.received_date
-                    ? new Date(item.received_date).toLocaleString()
-                    : "-"}
+                  <button type="button" onClick={() => deleteHistory(i)}>
+                    Delete
+                  </button>
                 </td>
-                <td>
-                  {item.used_date
-                    ? new Date(item.used_date).toLocaleString()
-                    : "-"}
-                </td>
-                <td>{item.installed_by || "-"}</td>
+              )}
+            </tr>
+          ))}
 
-                {canEditEverything && (
-                  <td>
-                    <button onClick={() => deleteHistory(item.id)}>
-                      Delete
-                    </button>
-                  </td>
-                )}
-              </tr>
-            );
-          })}
-
-          {filteredHistory.length === 0 && (
+          {history.length === 0 && (
             <tr>
-              <td
-                colSpan={canEditEverything ? 19 : 18}
-                style={{ textAlign: "center" }}
-              >
-                No history found.
+              <td colSpan={allowDelete ? (showMoney ? 11 : 8) : showMoney ? 10 : 7} style={{ textAlign: "center" }}>
+                No history records found.
               </td>
             </tr>
           )}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function SummaryCard({ title, value }) {
-  return (
-    <div
-      style={{
-        border: "1px solid #ccc",
-        padding: 12,
-        minWidth: 140
-      }}
-    >
-      <strong>{title}</strong>
-      <div style={{ fontSize: 20, marginTop: 6 }}>{value}</div>
     </div>
   );
 }

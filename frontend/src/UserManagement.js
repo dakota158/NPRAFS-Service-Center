@@ -21,6 +21,7 @@ function UserManagement({ user }) {
   const [profiles, setProfiles] = useState([]);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [showCreatePopup, setShowCreatePopup] = useState(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -48,6 +49,28 @@ function UserManagement({ user }) {
   };
 
   const allowedRoles = getAllowedRoles();
+
+  const resetCreateForm = () => {
+    setForm({
+      name: "",
+      email: "",
+      phone: "",
+      position: "",
+      password: "",
+      userType: "Tech"
+    });
+  };
+
+  const openCreatePopup = () => {
+    setMessage("");
+    resetCreateForm();
+    setShowCreatePopup(true);
+  };
+
+  const closeCreatePopup = () => {
+    setShowCreatePopup(false);
+    resetCreateForm();
+  };
 
   const canDeleteProfile = (profile) => {
     const targetRole = normalizeRole(profile?.role);
@@ -93,21 +116,17 @@ function UserManagement({ user }) {
   }, []);
 
   const updateForm = (field, value) => {
-    setForm((prev) => {
-      return {
-        ...prev,
-        [field]: value
-      };
-    });
+    setForm((prev) => ({
+      ...prev,
+      [field]: value
+    }));
   };
 
   const updateEditForm = (field, value) => {
-    setEditForm((prev) => {
-      return {
-        ...prev,
-        [field]: value
-      };
-    });
+    setEditForm((prev) => ({
+      ...prev,
+      [field]: value
+    }));
   };
 
   const createUser = async () => {
@@ -150,16 +169,8 @@ function UserManagement({ user }) {
       return;
     }
 
-    setForm({
-      name: "",
-      email: "",
-      phone: "",
-      position: "",
-      password: "",
-      userType: "Tech"
-    });
-
     setMessage(`${form.userType} user created`);
+    closeCreatePopup();
     loadProfiles();
   };
 
@@ -168,11 +179,6 @@ function UserManagement({ user }) {
 
     if (!canDeleteProfile(profile)) {
       setMessage("You are not allowed to delete that user type.");
-      return;
-    }
-
-    if (profile.id === user?.id) {
-      setMessage("You cannot delete your own account while logged in.");
       return;
     }
 
@@ -248,30 +254,25 @@ function UserManagement({ user }) {
       return;
     }
 
-    try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          name: editForm.name,
-          email: editForm.email,
-          phone: editForm.phone,
-          position: editForm.position,
-          role: newRole
-        })
-        .eq("id", profile.id);
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        name: editForm.name,
+        email: editForm.email,
+        phone: editForm.phone,
+        position: editForm.position,
+        role: newRole
+      })
+      .eq("id", profile.id);
 
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-
-      cancelEdit();
-      loadProfiles();
-      setMessage("User updated");
-    } catch (err) {
-      console.error(err);
-      setMessage(String(err.message || err));
+    if (error) {
+      setMessage(error.message);
+      return;
     }
+
+    cancelEdit();
+    loadProfiles();
+    setMessage("User updated");
   };
 
   const filteredProfiles = profiles.filter((profile) => {
@@ -306,75 +307,9 @@ function UserManagement({ user }) {
       )}
 
       {canCreateUsers && (
-        <div
-          style={{
-            border: "1px solid #ccc",
-            padding: 12,
-            maxWidth: 650,
-            marginBottom: 20,
-            position: "relative",
-            zIndex: 5,
-            background: "rgba(255, 255, 255, 0.95)"
-          }}
-        >
-          <h3>Create User</h3>
-
-          <input
-            type="text"
-            placeholder="Name"
-            value={form.name}
-            onChange={(e) => updateForm("name", e.target.value)}
-            style={inputStyle}
-          />
-
-          <input
-            type="email"
-            placeholder="Email"
-            value={form.email}
-            onChange={(e) => updateForm("email", e.target.value)}
-            style={inputStyle}
-          />
-
-          <input
-            type="text"
-            placeholder="Phone Number"
-            value={form.phone}
-            onChange={(e) => updateForm("phone", e.target.value)}
-            style={inputStyle}
-          />
-
-          <input
-            type="text"
-            placeholder="Position"
-            value={form.position}
-            onChange={(e) => updateForm("position", e.target.value)}
-            style={inputStyle}
-          />
-
-          <input
-            type="password"
-            placeholder="Temporary Password"
-            value={form.password}
-            onChange={(e) => updateForm("password", e.target.value)}
-            style={inputStyle}
-          />
-
-          <select
-            value={form.userType}
-            onChange={(e) => updateForm("userType", e.target.value)}
-            style={inputStyle}
-          >
-            {allowedRoles.map((roleOption) => (
-              <option key={roleOption} value={roleOption}>
-                {roleOption === "IT" ? "I.T." : roleOption}
-              </option>
-            ))}
-          </select>
-
-          <button type="button" onClick={createUser}>
-            Create User
-          </button>
-        </div>
+        <button type="button" onClick={openCreatePopup}>
+          Add User
+        </button>
       )}
 
       {message && <p style={{ color: "red" }}>{message}</p>}
@@ -459,9 +394,7 @@ function UserManagement({ user }) {
                     <input
                       type="text"
                       value={editForm.position}
-                      onChange={(e) =>
-                        updateEditForm("position", e.target.value)
-                      }
+                      onChange={(e) => updateEditForm("position", e.target.value)}
                       style={smallInputStyle}
                     />
                   </td>
@@ -470,6 +403,7 @@ function UserManagement({ user }) {
                     <button type="button" onClick={() => saveEdit(profile)}>
                       Save
                     </button>
+
                     <button
                       type="button"
                       onClick={cancelEdit}
@@ -527,6 +461,78 @@ function UserManagement({ user }) {
           )}
         </tbody>
       </table>
+
+      {showCreatePopup && (
+        <div style={popupStyle}>
+          <div style={boxStyle}>
+            <h3>Add User</h3>
+
+            <input
+              type="text"
+              placeholder="Name"
+              value={form.name}
+              onChange={(e) => updateForm("name", e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="email"
+              placeholder="Email"
+              value={form.email}
+              onChange={(e) => updateForm("email", e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="text"
+              placeholder="Phone Number"
+              value={form.phone}
+              onChange={(e) => updateForm("phone", e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="text"
+              placeholder="Position"
+              value={form.position}
+              onChange={(e) => updateForm("position", e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="password"
+              placeholder="Temporary Password"
+              value={form.password}
+              onChange={(e) => updateForm("password", e.target.value)}
+              style={inputStyle}
+            />
+
+            <select
+              value={form.userType}
+              onChange={(e) => updateForm("userType", e.target.value)}
+              style={inputStyle}
+            >
+              {allowedRoles.map((roleOption) => (
+                <option key={roleOption} value={roleOption}>
+                  {roleOption === "IT" ? "I.T." : roleOption}
+                </option>
+              ))}
+            </select>
+
+            <button type="button" onClick={createUser}>
+              Create User
+            </button>
+
+            <button
+              type="button"
+              onClick={closeCreatePopup}
+              style={{ marginLeft: 8 }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -539,10 +545,7 @@ const inputStyle = {
   boxSizing: "border-box",
   background: "#fff",
   color: "#000",
-  border: "1px solid #999",
-  position: "relative",
-  zIndex: 10,
-  pointerEvents: "auto"
+  border: "1px solid #999"
 };
 
 const smallInputStyle = {
@@ -552,6 +555,25 @@ const smallInputStyle = {
   background: "#fff",
   color: "#000",
   border: "1px solid #999"
+};
+
+const popupStyle = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 9999
+};
+
+const boxStyle = {
+  background: "white",
+  padding: 20,
+  width: 460,
+  maxHeight: "90vh",
+  overflowY: "auto",
+  borderRadius: 12
 };
 
 export default UserManagement;
