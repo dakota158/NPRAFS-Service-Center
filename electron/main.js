@@ -1,11 +1,136 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow } = require("electron");
 const path = require("path");
-const { autoUpdater } = require("electron-updater");
+const { spawn } = require("child_process");
+const http = require("http");
 
-let mainWindow;
-let updateChecked = false;
+let mainWindow = null;
+let loadingWindow = null;
+let backendProcess = null;
 
-function createWindow() {
+const BACKEND_PORT = 5000;
+const BACKEND_URL = `http://localhost:${BACKEND_PORT}`;
+
+function getBackendPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "backend", "server.js");
+  }
+
+  return path.join(__dirname, "../backend/server.js");
+}
+
+function getBackendCwd() {
+  if (app.isPackaged) {
+    return app.getPath("userData");
+  }
+
+  return path.join(__dirname, "../backend");
+}
+
+function getFrontendPath() {
+  return path.join(__dirname, "../frontend/build/index.html");
+}
+
+function isBackendRunning() {
+  return new Promise((resolve) => {
+    const req = http.get(BACKEND_URL, () => {
+      resolve(true);
+    });
+
+    req.on("error", () => {
+      resolve(false);
+    });
+
+    req.setTimeout(1000, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function waitForBackend() {
+  return new Promise((resolve) => {
+    const check = async () => {
+      const running = await isBackendRunning();
+
+      if (running) {
+        resolve(true);
+      } else {
+        setTimeout(check, 500);
+      }
+    };
+
+    check();
+  });
+}
+
+function startBackend() {
+  return new Promise((resolve, reject) => {
+    const backendPath = getBackendPath();
+    const backendCwd = getBackendCwd();
+
+    console.log("Starting backend from:", backendPath);
+    console.log("Backend working directory:", backendCwd);
+
+    backendProcess = spawn(process.execPath, [backendPath], {
+      cwd: backendCwd,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1"
+      },
+      windowsHide: true,
+      shell: false,
+      stdio: "pipe"
+    });
+
+    backendProcess.stdout.on("data", (data) => {
+      console.log(`Backend: ${data.toString()}`);
+    });
+
+    backendProcess.stderr.on("data", (data) => {
+      console.error(`Backend Error: ${data.toString()}`);
+    });
+
+    backendProcess.on("error", (err) => {
+      console.error("Failed to start backend:", err);
+      reject(err);
+    });
+
+    backendProcess.on("exit", (code) => {
+      console.log("Backend exited with code:", code);
+    });
+
+    waitForBackend().then(resolve);
+  });
+}
+
+function createLoadingWindow() {
+  loadingWindow = new BrowserWindow({
+    width: 420,
+    height: 260,
+    frame: false,
+    resizable: false,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  loadingWindow.loadFile(path.join(__dirname, "loading.html"));
+
+  loadingWindow.once("ready-to-show", () => {
+    loadingWindow.show();
+  });
+}
+
+function closeLoadingWindow() {
+  if (loadingWindow) {
+    loadingWindow.close();
+    loadingWindow = null;
+  }
+}
+
+function createMainWindow() {
   if (mainWindow) return;
 
   mainWindow = new BrowserWindow({
@@ -18,9 +143,10 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, "../frontend/build/index.html"));
+  mainWindow.loadFile(getFrontendPath());
 
   mainWindow.once("ready-to-show", () => {
+    closeLoadingWindow();
     mainWindow.show();
   });
 
@@ -29,62 +155,22 @@ function createWindow() {
   });
 }
 
-function setupUpdater() {
-  autoUpdater.autoDownload = true;
+app.whenReady().then(async () => {
+  createLoadingWindow();
 
-  autoUpdater.on("checking-for-update", () => {
-    console.log("Checking for update...");
-  });
+  const backendRunning = await isBackendRunning();
 
-  autoUpdater.on("update-available", () => {
-    console.log("Update available. Downloading...");
-  });
-
-  autoUpdater.on("update-not-available", () => {
-    console.log("No update available.");
-    updateChecked = true;
-    createWindow();
-  });
-
-  autoUpdater.on("error", (err) => {
-    console.error("Update error:", err);
-    updateChecked = true;
-    createWindow();
-  });
-
-  autoUpdater.on("update-downloaded", () => {
-    dialog
-      .showMessageBox({
-        type: "info",
-        title: "Update Ready",
-        message: "A new update has been downloaded. Restart now to install it?",
-        buttons: ["Restart Now", "Later"],
-        defaultId: 0,
-        cancelId: 1
-      })
-      .then((result) => {
-        if (result.response === 0) {
-          autoUpdater.quitAndInstall();
-        } else {
-          updateChecked = true;
-          createWindow();
-        }
-      });
-  });
-}
-
-app.whenReady().then(() => {
-  if (app.isPackaged) {
-    setupUpdater();
-    autoUpdater.checkForUpdates();
-  } else {
-    createWindow();
+  if (!backendRunning) {
+    await startBackend();
   }
+
+  createMainWindow();
 });
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0 && updateChecked) {
-    createWindow();
+app.on("before-quit", () => {
+  if (backendProcess) {
+    backendProcess.kill();
+    backendProcess = null;
   }
 });
 

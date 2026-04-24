@@ -7,12 +7,14 @@
   "scripts": {
     "start": "electron .",
     "build-frontend": "cd frontend && npm install && npm run build",
-    "build": "npm run build-frontend && electron-builder --win",
-    "publish": "npm run build-frontend && electron-builder --win --publish always"
+    "build-backend": "cd backend && npm install",
+    "build": "npm run build-frontend && npm run build-backend && electron-builder --win",
+    "publish": "npm run build-frontend && npm run build-backend && electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.autoshop.manager",
     "productName": "AutoShop Manager",
+    "artifactName": "AutoShop-Manager-Setup-${version}.${ext}",
     "directories": {
       "output": "dist"
     },
@@ -21,14 +23,30 @@
       "frontend/build/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AutoShop Manager"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "dakota158",
-        "repo": "NPRAFS-Service-Center"
+        "repo": "NPRAFS_Service_Center"
       }
     ]
   },
