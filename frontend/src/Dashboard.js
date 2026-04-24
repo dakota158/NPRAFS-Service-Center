@@ -6,6 +6,7 @@ import PartsManager from "./PartsManager";
 import HistoryManager from "./HistoryManager";
 import UserManagement from "./UserManagement";
 import CompanyInfo from "./CompanyInfo";
+import SuppliersManager from "./SuppliersManager";
 import "./App.css";
 
 function Dashboard({ user, onLogout }) {
@@ -25,7 +26,7 @@ function Dashboard({ user, onLogout }) {
   const canEditEverything =
     role === "IT" || role === "admin" || role === "Admin";
 
-  const tabs = ["Dashboard", "Orders", "Parts", "History"];
+  const tabs = ["Dashboard", "Orders", "Parts", "History", "Suppliers"];
 
   if (canViewAdminTabs) {
     tabs.push("User Management", "Profile", "Company Info");
@@ -39,6 +40,7 @@ function Dashboard({ user, onLogout }) {
     const { data, error } = await supabase
       .from("company_info")
       .select("name, logo_url")
+      .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -68,11 +70,7 @@ function Dashboard({ user, onLogout }) {
         <aside className="sidebar">
           <div className="sidebar-logo-row">
             {logoToUse && (
-              <img
-                src={logoToUse}
-                alt="Company Logo"
-                className="sidebar-logo"
-              />
+              <img src={logoToUse} alt="Company Logo" className="sidebar-logo" />
             )}
 
             <div>
@@ -89,9 +87,7 @@ function Dashboard({ user, onLogout }) {
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                className={
-                  activeTab === tab ? "nav-button active" : "nav-button"
-                }
+                className={activeTab === tab ? "nav-button active" : "nav-button"}
               >
                 {tab}
               </button>
@@ -126,6 +122,10 @@ function Dashboard({ user, onLogout }) {
 
             {activeTab === "History" && (
               <HistoryManager canEditEverything={canEditEverything} />
+            )}
+
+            {activeTab === "Suppliers" && (
+              <SuppliersManager user={user} canEditEverything={canEditEverything} />
             )}
 
             {activeTab === "User Management" && canViewAdminTabs && (

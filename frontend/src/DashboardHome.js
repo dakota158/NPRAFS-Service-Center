@@ -4,164 +4,179 @@ import { supabase } from "./supabaseClient";
 function DashboardHome() {
   const [stats, setStats] = useState({
     activeOrders: 0,
-    orderedNotReceived: 0,
-    partsWaiting: 0,
-    historyCount: 0,
-    totalProfit: 0,
-    monthlyProfit: 0
+    partsInStock: 0,
+    historyRecords: 0,
+    suppliers: 0,
+    totalPaid: 0,
+    totalCharged: 0,
+    totalProfit: 0
   });
 
-  const [alerts, setAlerts] = useState([]);
-  const [message, setMessage] = useState("");
-
-  const loadStats = async () => {
-    try {
-      const ordersResult = await supabase.from("orders").select("*");
-      const partsResult = await supabase.from("parts").select("*");
-      const historyResult = await supabase.from("history").select("*");
-
-      if (ordersResult.error) {
-        setMessage(ordersResult.error.message);
-        return;
-      }
-
-      if (partsResult.error) {
-        setMessage(partsResult.error.message);
-        return;
-      }
-
-      if (historyResult.error) {
-        setMessage(historyResult.error.message);
-        return;
-      }
-
-      const orders = ordersResult.data || [];
-      const parts = partsResult.data || [];
-      const history = historyResult.data || [];
-
-      const now = new Date();
-      const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
-
-      const activeOrders = orders.filter((order) => !order.received).length;
-
-      const orderedNotReceived = orders.filter(
-        (order) => order.part_ordered && !order.received
-      ).length;
-
-      const totalProfit = history.reduce((sum, item) => {
-        return sum + Number(item.profit || 0);
-      }, 0);
-
-      const monthlyProfit = history.reduce((sum, item) => {
-        if (!item.used_date) return sum;
-
-        const usedDate = new Date(item.used_date);
-
-        if (
-          usedDate.getMonth() === currentMonth &&
-          usedDate.getFullYear() === currentYear
-        ) {
-          return sum + Number(item.profit || 0);
-        }
-
-        return sum;
-      }, 0);
-
-      const alertList = [];
-
-      orders.forEach((order) => {
-        if (order.part_ordered && !order.received) {
-          alertList.push(
-            `Ordered part not received: ${
-              order.part_number || "Unknown"
-            } / RO ${order.repair_order_number || "-"}`
-          );
-        }
-      });
-
-      parts.forEach((part) => {
-        alertList.push(
-          `Part waiting to be used: ${part.part_number || "Unknown"} / RO ${
-            part.repair_order_number || "-"
-          }`
-        );
-      });
-
-      setStats({
-        activeOrders,
-        orderedNotReceived,
-        partsWaiting: parts.length,
-        historyCount: history.length,
-        totalProfit,
-        monthlyProfit
-      });
-
-      setAlerts(alertList.slice(0, 10));
-      setMessage("");
-    } catch (err) {
-      console.error(err);
-      setMessage(String(err.message || err));
-    }
-  };
+  const [recentAuditLogs, setRecentAuditLogs] = useState([]);
 
   useEffect(() => {
-    loadStats();
+    loadDashboard();
   }, []);
+
+  const loadDashboard = async () => {
+    const { data: orders } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("received", false);
+
+    const { data: parts } = await supabase.from("parts").select("*");
+    const { data: history } = await supabase.from("history").select("*");
+    const { data: suppliers } = await supabase.from("suppliers").select("*");
+
+    const { data: auditLogs } = await supabase
+      .from("audit_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(8);
+
+    const totalPaid = (history || []).reduce(
+      (sum, item) => sum + Number(item.cost || 0),
+      0
+    );
+
+    const totalCharged = (history || []).reduce(
+      (sum, item) => sum + Number(item.net || 0),
+      0
+    );
+
+    setStats({
+      activeOrders: orders?.length || 0,
+      partsInStock: parts?.reduce((sum, part) => sum + Number(part.quantity || 0), 0) || 0,
+      historyRecords: history?.length || 0,
+      suppliers: suppliers?.length || 0,
+      totalPaid,
+      totalCharged,
+      totalProfit: totalCharged - totalPaid
+    });
+
+    setRecentAuditLogs(auditLogs || []);
+  };
+
+  const maxValue = Math.max(
+    stats.activeOrders,
+    stats.partsInStock,
+    stats.historyRecords,
+    stats.suppliers,
+    1
+  );
 
   return (
     <div>
-      <h2>Dashboard</h2>
+      <h2>Dashboard Overview</h2>
 
-      {message && <p style={{ color: "red" }}>{message}</p>}
-
-      <div
-        style={{
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-          marginBottom: 20
-        }}
-      >
+      <div style={cardGrid}>
         <StatCard title="Active Orders" value={stats.activeOrders} />
-        <StatCard title="Ordered Not Received" value={stats.orderedNotReceived} />
-        <StatCard title="Parts Waiting" value={stats.partsWaiting} />
-        <StatCard title="Used Parts History" value={stats.historyCount} />
+        <StatCard title="Parts In Stock" value={stats.partsInStock} />
+        <StatCard title="History Records" value={stats.historyRecords} />
+        <StatCard title="Suppliers" value={stats.suppliers} />
+        <StatCard title="What We Paid" value={`$${stats.totalPaid.toFixed(2)}`} />
+        <StatCard title="What We Charged" value={`$${stats.totalCharged.toFixed(2)}`} />
         <StatCard title="Total Profit" value={`$${stats.totalProfit.toFixed(2)}`} />
-        <StatCard
-          title="Monthly Profit"
-          value={`$${stats.monthlyProfit.toFixed(2)}`}
-        />
       </div>
 
-      <h3>Notifications</h3>
+      <h3>System Chart</h3>
 
-      {alerts.length === 0 ? (
-        <p>No active alerts.</p>
-      ) : (
-        <ul>
-          {alerts.map((alert, index) => (
-            <li key={index}>{alert}</li>
+      <div style={chartBox}>
+        <Bar label="Active Orders" value={stats.activeOrders} maxValue={maxValue} />
+        <Bar label="Parts In Stock" value={stats.partsInStock} maxValue={maxValue} />
+        <Bar label="History Records" value={stats.historyRecords} maxValue={maxValue} />
+        <Bar label="Suppliers" value={stats.suppliers} maxValue={maxValue} />
+      </div>
+
+      <h3>Recent Audit Log</h3>
+
+      <table border="1" cellPadding="8" style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>User</th>
+            <th>Action</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {recentAuditLogs.map((log) => (
+            <tr key={log.id}>
+              <td>{log.created_at ? new Date(log.created_at).toLocaleString() : "-"}</td>
+              <td>{log.user_email || "-"}</td>
+              <td>{log.action || "-"}</td>
+              <td>{log.details || "-"}</td>
+            </tr>
           ))}
-        </ul>
-      )}
+
+          {recentAuditLogs.length === 0 && (
+            <tr>
+              <td colSpan="4" style={{ textAlign: "center" }}>
+                No audit log entries yet.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
 
 function StatCard({ title, value }) {
   return (
-    <div
-      style={{
-        border: "1px solid #ccc",
-        padding: 14,
-        minWidth: 180
-      }}
-    >
-      <strong>{title}</strong>
-      <div style={{ fontSize: 24, marginTop: 8 }}>{value}</div>
+    <div style={statCard}>
+      <div style={{ color: "#64748b", fontSize: 14 }}>{title}</div>
+      <div style={{ fontSize: 26, fontWeight: "bold", marginTop: 8 }}>{value}</div>
     </div>
   );
 }
+
+function Bar({ label, value, maxValue }) {
+  const width = `${Math.max((value / maxValue) * 100, 4)}%`;
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <strong>{label}</strong>
+        <span>{value}</span>
+      </div>
+
+      <div style={{ background: "#e5e7eb", borderRadius: 10, height: 18 }}>
+        <div
+          style={{
+            width,
+            height: 18,
+            borderRadius: 10,
+            background: "#2563eb"
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+const cardGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 14,
+  marginBottom: 24
+};
+
+const statCard = {
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
+  padding: 16,
+  boxShadow: "0 4px 14px rgba(15,23,42,0.08)"
+};
+
+const chartBox = {
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
+  padding: 16,
+  marginBottom: 24
+};
 
 export default DashboardHome;
