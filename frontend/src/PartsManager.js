@@ -1,50 +1,82 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "./supabaseClient";
 
 function PartsManager({ user, canEditEverything }) {
   const [parts, setParts] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
 
   const [newPart, setNewPart] = useState({
+    partNumber: "",
     name: "",
     quantity: "",
     dateReceived: "",
-    partNumber: "",
     repairOrderNumber: ""
   });
 
   const [editingId, setEditingId] = useState(null);
   const [editPart, setEditPart] = useState({
+    partNumber: "",
     name: "",
     quantity: "",
     dateReceived: "",
-    partNumber: "",
     repairOrderNumber: ""
   });
 
   const [showUsedPopup, setShowUsedPopup] = useState(false);
   const [selectedPart, setSelectedPart] = useState(null);
+  const [quantityUsed, setQuantityUsed] = useState("");
+  const [repairOrderUsed, setRepairOrderUsed] = useState("");
   const [installedBy, setInstalledBy] = useState("");
+  const [amountPaid, setAmountPaid] = useState("");
+  const [amountCharged, setAmountCharged] = useState("");
 
   const loadParts = async () => {
     try {
-      const res = await fetch("http://localhost:5000/parts");
-      const data = await res.json();
+      const { data, error } = await supabase
+        .from("parts")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-      if (data.success) {
-        setParts(data.parts || []);
-      } else {
-        setMessage(data.message || "Could not load parts");
+      if (error) {
+        setMessage(error.message);
+        return;
       }
+
+      setParts(data || []);
+      setMessage("");
     } catch (err) {
       console.error(err);
-      setMessage("Could not connect to backend");
+      setMessage(String(err.message || err));
+    }
+  };
+
+  const loadOrders = async () => {
+    try {
+      const { data, error } = await supabase.from("orders").select("*");
+
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+
+      setOrders(data || []);
+    } catch (err) {
+      console.error(err);
+      setMessage(String(err.message || err));
     }
   };
 
   useEffect(() => {
     loadParts();
+    loadOrders();
   }, []);
+
+  const findSourceOrder = (part) => {
+    if (!part.source_order_id) return null;
+    return orders.find((order) => order.id === part.source_order_id) || null;
+  };
 
   const updateNewPart = (field, value) => {
     setNewPart((prev) => ({
@@ -60,49 +92,43 @@ function PartsManager({ user, canEditEverything }) {
     }));
   };
 
-  const addPart = async () => {
+  const addStockPart = async () => {
     if (!canEditEverything) return;
 
-    if (!newPart.name || newPart.quantity === "") {
-      setMessage("Part name and quantity are required");
+    setMessage("");
+
+    if (!newPart.partNumber || !newPart.name || !newPart.quantity) {
+      setMessage("Part number, description, and quantity are required");
       return;
     }
 
     try {
-      const res = await fetch("http://localhost:5000/parts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          name: newPart.name,
-          quantity: Number(newPart.quantity),
-          dateReceived: newPart.dateReceived,
-          partNumber: newPart.partNumber,
-          repairOrderNumber: newPart.repairOrderNumber,
-          sourceOrderId: null
-        })
+      const { error } = await supabase.from("parts").insert({
+        part_number: newPart.partNumber,
+        name: newPart.name,
+        quantity: Number(newPart.quantity),
+        date_received: newPart.dateReceived || null,
+        repair_order_number: newPart.repairOrderNumber || "",
+        source_order_id: null
       });
 
-      const data = await res.json();
-
-      if (data.success) {
-        setNewPart({
-          name: "",
-          quantity: "",
-          dateReceived: "",
-          partNumber: "",
-          repairOrderNumber: ""
-        });
-
-        setMessage("");
-        loadParts();
-      } else {
-        setMessage(data.message || "Could not add part");
+      if (error) {
+        setMessage(error.message);
+        return;
       }
+
+      setNewPart({
+        partNumber: "",
+        name: "",
+        quantity: "",
+        dateReceived: "",
+        repairOrderNumber: ""
+      });
+
+      loadParts();
     } catch (err) {
       console.error(err);
-      setMessage("Could not add part");
+      setMessage(String(err.message || err));
     }
   };
 
@@ -111,128 +137,225 @@ function PartsManager({ user, canEditEverything }) {
 
     setEditingId(part.id);
     setEditPart({
+      partNumber: part.part_number || "",
       name: part.name || "",
       quantity: part.quantity || "",
-      dateReceived: part.dateReceived
-        ? String(part.dateReceived).slice(0, 10)
+      dateReceived: part.date_received
+        ? String(part.date_received).slice(0, 10)
         : "",
-      partNumber: part.partNumber || "",
-      repairOrderNumber: part.repairOrderNumber || ""
+      repairOrderNumber: part.repair_order_number || ""
     });
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setEditPart({
+      partNumber: "",
       name: "",
       quantity: "",
       dateReceived: "",
-      partNumber: "",
       repairOrderNumber: ""
     });
   };
 
-  const saveEdit = async (id) => {
+  const saveEdit = async (partId) => {
     if (!canEditEverything) return;
 
-    if (!editPart.name || editPart.quantity === "") {
-      setMessage("Part name and quantity are required");
+    setMessage("");
+
+    if (!editPart.partNumber || !editPart.name || editPart.quantity === "") {
+      setMessage("Part number, description, and quantity are required");
       return;
     }
 
     try {
-      const res = await fetch(`http://localhost:5000/parts/${id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
+      const { error } = await supabase
+        .from("parts")
+        .update({
+          part_number: editPart.partNumber,
           name: editPart.name,
           quantity: Number(editPart.quantity),
-          dateReceived: editPart.dateReceived,
-          partNumber: editPart.partNumber,
-          repairOrderNumber: editPart.repairOrderNumber
+          date_received: editPart.dateReceived || null,
+          repair_order_number: editPart.repairOrderNumber || ""
         })
-      });
+        .eq("id", partId);
 
-      const data = await res.json();
-
-      if (data.success) {
-        cancelEdit();
-        setMessage("");
-        loadParts();
-      } else {
-        setMessage(data.message || "Could not update part");
+      if (error) {
+        setMessage(error.message);
+        return;
       }
+
+      cancelEdit();
+      loadParts();
     } catch (err) {
       console.error(err);
-      setMessage("Could not update part");
+      setMessage(String(err.message || err));
     }
   };
 
-  const deletePart = async (id) => {
+  const deletePart = async (partId) => {
     if (!canEditEverything) return;
 
     try {
-      const res = await fetch(`http://localhost:5000/parts/${id}`, {
-        method: "DELETE"
-      });
+      const { error } = await supabase.from("parts").delete().eq("id", partId);
 
-      const data = await res.json();
-
-      if (data.success) {
-        loadParts();
-      } else {
-        setMessage(data.message || "Could not delete part");
+      if (error) {
+        setMessage(error.message);
+        return;
       }
+
+      loadParts();
     } catch (err) {
       console.error(err);
-      setMessage("Could not delete part");
+      setMessage(String(err.message || err));
     }
   };
 
   const openUsedPopup = (part) => {
+    const sourceOrder = findSourceOrder(part);
+
     setSelectedPart(part);
-    setInstalledBy(user?.username || "");
+    setQuantityUsed("");
+    setRepairOrderUsed(part.repair_order_number || "");
+    setInstalledBy(user?.username || user?.email || "");
+
+    setAmountPaid(
+      sourceOrder?.cost !== undefined && sourceOrder?.cost !== null
+        ? String(sourceOrder.cost)
+        : ""
+    );
+
+    setAmountCharged(
+      sourceOrder?.net !== undefined && sourceOrder?.net !== null
+        ? String(sourceOrder.net)
+        : ""
+    );
+
     setShowUsedPopup(true);
   };
 
   const closeUsedPopup = () => {
     setSelectedPart(null);
+    setQuantityUsed("");
+    setRepairOrderUsed("");
     setInstalledBy("");
+    setAmountPaid("");
+    setAmountCharged("");
     setShowUsedPopup(false);
   };
 
+  const calculatedProfit =
+    Number(amountCharged || 0) - Number(amountPaid || 0);
+
   const markUsed = async () => {
     if (!selectedPart) return;
+
+    setMessage("");
+
+    const currentQuantity = Number(selectedPart.quantity || 0);
+    const usedQuantity = Number(quantityUsed || 0);
+    const paid = Number(amountPaid || 0);
+    const charged = Number(amountCharged || 0);
+    const profit = charged - paid;
+
+    if (!usedQuantity || usedQuantity <= 0) {
+      setMessage("Enter a quantity used");
+      return;
+    }
+
+    if (usedQuantity > currentQuantity) {
+      setMessage("Quantity used cannot be more than quantity in stock");
+      return;
+    }
+
+    if (!repairOrderUsed.trim()) {
+      setMessage("Repair order number is required");
+      return;
+    }
 
     if (!installedBy.trim()) {
       setMessage("Installed by is required");
       return;
     }
 
+    if (paid < 0) {
+      setMessage("What we paid cannot be negative");
+      return;
+    }
+
+    if (charged < 0) {
+      setMessage("What we charged cannot be negative");
+      return;
+    }
+
+    const sourceOrder = findSourceOrder(selectedPart);
+    const usedDate = new Date().toISOString();
+
     try {
-      const res = await fetch(`http://localhost:5000/parts/${selectedPart.id}/used`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          installedBy
-        })
+      const { error: historyError } = await supabase.from("history").insert({
+        part_id: selectedPart.id,
+        source_order_id: selectedPart.source_order_id || null,
+        part_number: selectedPart.part_number || "",
+        part_description_seller: selectedPart.name || "",
+        quantity: usedQuantity,
+
+        // Database compatibility:
+        // cost = What We Paid
+        // net = What We Charged
+        // profit = What We Charged - What We Paid
+        cost: paid,
+        net: charged,
+        profit: profit,
+
+        date_approved: sourceOrder?.date_approved || null,
+        repair_order_number: repairOrderUsed,
+        part_ordered: sourceOrder?.part_ordered || false,
+        ordered_by: sourceOrder?.ordered_by || "",
+        date_ordered: sourceOrder?.date_ordered || null,
+        received: true,
+        tested_good: sourceOrder?.tested_good || false,
+        tested_by: sourceOrder?.tested_by || "",
+        received_date: selectedPart.date_received || null,
+        used_date: usedDate,
+        installed_by: installedBy
       });
 
-      const data = await res.json();
-
-      if (data.success) {
-        closeUsedPopup();
-        loadParts();
-      } else {
-        setMessage(data.message || "Could not mark part used");
+      if (historyError) {
+        setMessage(historyError.message);
+        return;
       }
+
+      const remainingQuantity = currentQuantity - usedQuantity;
+
+      if (remainingQuantity <= 0) {
+        const { error: deleteError } = await supabase
+          .from("parts")
+          .delete()
+          .eq("id", selectedPart.id);
+
+        if (deleteError) {
+          setMessage(deleteError.message);
+          return;
+        }
+      } else {
+        const { error: updateError } = await supabase
+          .from("parts")
+          .update({
+            quantity: remainingQuantity
+          })
+          .eq("id", selectedPart.id);
+
+        if (updateError) {
+          setMessage(updateError.message);
+          return;
+        }
+      }
+
+      closeUsedPopup();
+      loadParts();
     } catch (err) {
       console.error(err);
-      setMessage("Could not mark part used");
+      setMessage(String(err.message || err));
     }
   };
 
@@ -240,12 +363,15 @@ function PartsManager({ user, canEditEverything }) {
     const text = search.toLowerCase();
 
     return parts.filter((part) => {
+      const sourceType = part.source_order_id ? "repair order part" : "stock inventory";
+
       const searchable = [
+        part.part_number,
         part.name,
-        part.partNumber,
-        part.repairOrderNumber,
-        part.dateReceived,
-        part.quantity
+        part.quantity,
+        part.date_received,
+        part.repair_order_number,
+        sourceType
       ]
         .join(" ")
         .toLowerCase();
@@ -263,7 +389,7 @@ function PartsManager({ user, canEditEverything }) {
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         style={{
-          padding: 8,
+          padding: 10,
           width: "100%",
           maxWidth: 500,
           marginBottom: 20
@@ -275,24 +401,24 @@ function PartsManager({ user, canEditEverything }) {
           style={{
             border: "1px solid #ccc",
             padding: 12,
-            marginBottom: 20,
-            maxWidth: 600
+            maxWidth: 650,
+            marginBottom: 20
           }}
         >
-          <h3>Add Part Manually</h3>
+          <h3>Add Stock Inventory</h3>
 
           <input
             placeholder="Part Number"
             value={newPart.partNumber}
             onChange={(e) => updateNewPart("partNumber", e.target.value)}
-            style={{ padding: 8, display: "block", marginBottom: 8, width: "100%" }}
+            style={inputStyle}
           />
 
           <input
-            placeholder="Name / Description"
+            placeholder="Part Description / Seller"
             value={newPart.name}
             onChange={(e) => updateNewPart("name", e.target.value)}
-            style={{ padding: 8, display: "block", marginBottom: 8, width: "100%" }}
+            style={inputStyle}
           />
 
           <input
@@ -300,7 +426,7 @@ function PartsManager({ user, canEditEverything }) {
             placeholder="Quantity"
             value={newPart.quantity}
             onChange={(e) => updateNewPart("quantity", e.target.value)}
-            style={{ padding: 8, display: "block", marginBottom: 8, width: "100%" }}
+            style={inputStyle}
           />
 
           <label>
@@ -309,18 +435,18 @@ function PartsManager({ user, canEditEverything }) {
               type="date"
               value={newPart.dateReceived}
               onChange={(e) => updateNewPart("dateReceived", e.target.value)}
-              style={{ padding: 8, display: "block", marginBottom: 8, width: "100%" }}
+              style={inputStyle}
             />
           </label>
 
           <input
-            placeholder="Repair Order Number"
+            placeholder="Repair Order Number optional"
             value={newPart.repairOrderNumber}
             onChange={(e) => updateNewPart("repairOrderNumber", e.target.value)}
-            style={{ padding: 8, display: "block", marginBottom: 8, width: "100%" }}
+            style={inputStyle}
           />
 
-          <button onClick={addPart}>Add Part</button>
+          <button onClick={addStockPart}>Add Stock Part</button>
         </div>
       )}
 
@@ -333,12 +459,12 @@ function PartsManager({ user, canEditEverything }) {
       >
         <thead>
           <tr>
-            <th>ID</th>
+            <th>Source</th>
             <th>Part Number</th>
-            <th>Name / Description</th>
-            <th>Quantity</th>
+            <th>Description / Seller</th>
+            <th>Quantity In Stock</th>
             <th>Date Received</th>
-            <th>Repair Order Number</th>
+            <th>Repair Order #</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -346,10 +472,10 @@ function PartsManager({ user, canEditEverything }) {
         <tbody>
           {filteredParts.map((part) => (
             <tr key={part.id}>
-              <td>{part.id}</td>
-
               {editingId === part.id ? (
                 <>
+                  <td>{part.source_order_id ? "Repair Order Part" : "Stock Inventory"}</td>
+
                   <td>
                     <input
                       value={editPart.partNumber}
@@ -398,18 +524,21 @@ function PartsManager({ user, canEditEverything }) {
                 </>
               ) : (
                 <>
-                  <td>{part.partNumber || "-"}</td>
+                  <td>{part.source_order_id ? "Repair Order Part" : "Stock Inventory"}</td>
+                  <td>{part.part_number || "-"}</td>
                   <td>{part.name || "-"}</td>
-                  <td>{part.quantity}</td>
+                  <td>{part.quantity || 0}</td>
                   <td>
-                    {part.dateReceived
-                      ? new Date(part.dateReceived).toLocaleDateString()
+                    {part.date_received
+                      ? new Date(part.date_received).toLocaleString()
                       : "-"}
                   </td>
-                  <td>{part.repairOrderNumber || "-"}</td>
+                  <td>{part.repair_order_number || "-"}</td>
 
                   <td>
-                    <button onClick={() => openUsedPopup(part)}>Mark Used</button>
+                    <button onClick={() => openUsedPopup(part)}>
+                      Mark Used
+                    </button>
 
                     {canEditEverything && (
                       <>
@@ -445,50 +574,111 @@ function PartsManager({ user, canEditEverything }) {
       </table>
 
       {showUsedPopup && selectedPart && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center"
-          }}
-        >
-          <div style={{ background: "white", padding: 20, width: 420 }}>
+        <div style={popupStyle}>
+          <div style={boxStyle}>
             <h3>Mark Part Used</h3>
 
             <p>
-              <strong>Part:</strong> {selectedPart.partNumber || "-"}
+              <strong>Source:</strong>{" "}
+              {selectedPart.source_order_id ? "Repair Order Part" : "Stock Inventory"}
             </p>
 
             <p>
-              <strong>Description:</strong> {selectedPart.name}
+              <strong>Part:</strong> {selectedPart.part_number || "-"}
             </p>
+
+            <p>
+              <strong>Description:</strong> {selectedPart.name || "-"}
+            </p>
+
+            <p>
+              <strong>Quantity Available:</strong> {selectedPart.quantity || 0}
+            </p>
+
+            <input
+              type="number"
+              placeholder="Quantity Used"
+              value={quantityUsed}
+              onChange={(e) => setQuantityUsed(e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              placeholder="Repair Order Number"
+              value={repairOrderUsed}
+              onChange={(e) => setRepairOrderUsed(e.target.value)}
+              style={inputStyle}
+            />
 
             <input
               placeholder="Installed By"
               value={installedBy}
               onChange={(e) => setInstalledBy(e.target.value)}
-              style={{
-                width: "100%",
-                padding: 8,
-                marginBottom: 12
-              }}
+              style={inputStyle}
             />
 
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <button onClick={markUsed}>Save Used</button>
-              <button onClick={closeUsedPopup}>Cancel</button>
+            <input
+              type="number"
+              step="0.01"
+              placeholder="What We Paid"
+              value={amountPaid}
+              onChange={(e) => setAmountPaid(e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="number"
+              step="0.01"
+              placeholder="What We Charged"
+              value={amountCharged}
+              onChange={(e) => setAmountCharged(e.target.value)}
+              style={inputStyle}
+            />
+
+            <div
+              style={{
+                border: "1px solid #ddd",
+                padding: 10,
+                marginBottom: 10,
+                background: "#f8fafc"
+              }}
+            >
+              <strong>Auto Profit:</strong>{" "}
+              ${calculatedProfit.toFixed(2)}
             </div>
+
+            <button onClick={markUsed}>Save Used</button>
+            <button onClick={closeUsedPopup} style={{ marginLeft: 8 }}>
+              Cancel
+            </button>
           </div>
         </div>
       )}
     </div>
   );
 }
+
+const inputStyle = {
+  padding: 8,
+  display: "block",
+  width: "100%",
+  marginBottom: 8
+};
+
+const popupStyle = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 9999
+};
+
+const boxStyle = {
+  background: "white",
+  padding: 20,
+  width: 440
+};
 
 export default PartsManager;

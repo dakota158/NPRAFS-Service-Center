@@ -1,7 +1,7 @@
 {
-  "name": "autoshop-manager",
+  "name": "nprafs-service-center",
   "version": "1.0.0",
-  "description": "AutoShop inventory and repair system",
+  "description": "NPRAFS Service Center inventory and repair system",
   "author": "Dakota Switzer",
   "main": "electron/main.js",
   "scripts": {
@@ -12,15 +12,18 @@
     "publish": "npm run build-frontend && npm run build-backend && electron-builder --win --publish always"
   },
   "build": {
-    "appId": "com.autoshop.manager",
-    "productName": "AutoShop Manager",
-    "artifactName": "AutoShop-Manager-Setup-${version}.${ext}",
+    "appId": "com.nprafs.servicecenter",
+    "productName": "NPRAFS Service Center",
+    "artifactName": "NPRAFS-Service-Center-Setup-${version}.${ext}",
+    "copyright": "Copyright © 2026 NPRAFS Service Center",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "electron/**/*",
       "frontend/build/**/*",
+      "frontend/public/icon.ico",
       "package.json"
     ],
     "extraResources": [
@@ -33,14 +36,25 @@
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AutoShop Manager"
+      "shortcutName": "NPRAFS Service Center",
+      "artifactName": "NPRAFS-Service-Center-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerSidebar": "build/installer-sidebar.bmp",
+      "installerHeader": "build/installer-header.bmp",
+      "uninstallDisplayName": "NPRAFS Service Center",
+      "deleteAppDataOnUninstall": false
     },
     "publish": [
       {

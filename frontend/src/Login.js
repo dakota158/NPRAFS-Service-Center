@@ -1,64 +1,187 @@
 import { useState } from "react";
+import { supabase } from "./supabaseClient";
 
-function Login({ onLogin }) {
-  const [username, setUsername] = useState("");
+function Login() {
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [message, setMessage] = useState("");
+  const [debugMessage, setDebugMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const login = async () => {
-    setLoading(true);
-    setMessage("");
+  const logoPath = `${process.env.PUBLIC_URL}/favicon.ico`;
+
+  const testConnection = async () => {
+    setDebugMessage("Testing Supabase connection...");
 
     try {
-      const res = await fetch("http://localhost:5000/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ username, password })
-      });
+      const { data, error } = await supabase.from("profiles").select("*").limit(1);
 
-      const data = await res.json();
-      console.log("LOGIN RESPONSE:", data);
-
-      if (data.success) {
-        onLogin(data.token, data.user);
-      } else {
-        setMessage(data.message || "Login failed");
+      if (error) {
+        setDebugMessage(`Supabase connection error: ${error.message}`);
+        return;
       }
+
+      setDebugMessage("Supabase connection works.");
+      console.log("Connection test data:", data);
     } catch (err) {
       console.error(err);
-      setMessage("Could not connect to backend");
+      setDebugMessage(`Connection failed: ${String(err.message || err)}`);
+    }
+  };
+
+  const login = async () => {
+    setMessage("");
+    setDebugMessage("");
+    setLoading(true);
+
+    if (!email || !password) {
+      setMessage("Email and password are required.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      console.log("Trying login with:", email);
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password
+      });
+
+      console.log("Login response:", data, error);
+
+      if (error) {
+        setMessage(error.message || "Login failed.");
+        setLoading(false);
+        return;
+      }
+
+      if (!data.session) {
+        setMessage("Login did not return a session.");
+        setLoading(false);
+        return;
+      }
+
+      setMessage("Login successful. Loading dashboard...");
+      window.location.reload();
+    } catch (err) {
+      console.error("Login crash:", err);
+      setMessage(String(err.message || err));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ padding: 20, maxWidth: 400, margin: "40px auto" }}>
-      <h2>AutoShop Login</h2>
-
-      <input
-        placeholder="Username"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        style={{ width: "100%", padding: 10, marginBottom: 10 }}
+    <div
+      style={{
+        minHeight: "100vh",
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+        background: "#f4f6f8",
+        overflow: "hidden"
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage: `url('${logoPath}')`,
+          backgroundRepeat: "no-repeat",
+          backgroundPosition: "center",
+          backgroundSize: "420px",
+          opacity: 0.12,
+          zIndex: 0
+        }}
       />
 
-      <input
-        type="password"
-        placeholder="Password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        style={{ width: "100%", padding: 10, marginBottom: 10 }}
-      />
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          width: "100%",
+          maxWidth: 430,
+          padding: 28,
+          borderRadius: 12,
+          background: "rgba(255, 255, 255, 0.92)",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.18)",
+          border: "1px solid rgba(0,0,0,0.08)"
+        }}
+      >
+        <div style={{ textAlign: "center", marginBottom: 22 }}>
+          <img
+            src={logoPath}
+            alt="NPRAFS Logo"
+            style={{
+              width: 90,
+              height: 90,
+              objectFit: "contain",
+              marginBottom: 10
+            }}
+          />
 
-      <button onClick={login} disabled={loading} style={{ padding: 10, width: "100%" }}>
-        {loading ? "Logging in..." : "Login"}
-      </button>
+          <h2 style={{ margin: 0 }}>NPRAFS Service Center Login</h2>
+        </div>
 
-      {message && <p style={{ color: "red", marginTop: 10 }}>{message}</p>}
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={{
+            padding: 10,
+            display: "block",
+            width: "100%",
+            marginBottom: 10,
+            boxSizing: "border-box"
+          }}
+        />
+
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") login();
+          }}
+          style={{
+            padding: 10,
+            display: "block",
+            width: "100%",
+            marginBottom: 10,
+            boxSizing: "border-box"
+          }}
+        />
+
+        <button
+          onClick={login}
+          disabled={loading}
+          style={{ padding: 10, width: "100%", marginBottom: 10 }}
+        >
+          {loading ? "Logging in..." : "Login"}
+        </button>
+
+        <button
+          onClick={testConnection}
+          type="button"
+          style={{ padding: 10, width: "100%" }}
+        >
+          Test Supabase Connection
+        </button>
+
+        {message && <p style={{ color: "red" }}>{message}</p>}
+
+        {debugMessage && (
+          <p style={{ marginTop: 12, background: "#eee", padding: 10 }}>
+            {debugMessage}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

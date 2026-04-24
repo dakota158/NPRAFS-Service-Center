@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { supabase } from "./supabaseClient";
 
 function OrdersManager({ user, canEditEverything }) {
   const [orders, setOrders] = useState([]);
@@ -8,36 +9,33 @@ function OrdersManager({ user, canEditEverything }) {
     partNumber: "",
     partDescriptionSeller: "",
     quantity: "",
-    cost: "",
-    net: "",
-    profit: "",
-    orderDate: "",
+    cost: "", // What We Paid
+    net: "",  // What We Charged
+    dateApproved: "",
     repairOrderNumber: ""
   });
 
-  const [showOrderedPopup, setShowOrderedPopup] = useState(false);
-  const [selectedOrderedOrder, setSelectedOrderedOrder] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const [orderedBy, setOrderedBy] = useState("");
   const [dateOrdered, setDateOrdered] = useState("");
 
-  const [showReceivePopup, setShowReceivePopup] = useState(false);
-  const [selectedReceiveOrder, setSelectedReceiveOrder] = useState(null);
+  const [receiveOrder, setReceiveOrder] = useState(null);
   const [testedGood, setTestedGood] = useState(false);
   const [testedBy, setTestedBy] = useState("");
 
   const loadOrders = async () => {
-    try {
-      const res = await fetch("http://localhost:5000/orders");
-      const data = await res.json();
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("received", false)
+      .order("created_at", { ascending: false });
 
-      if (data.success) {
-        const activeOrders = (data.orders || []).filter((order) => !order.received);
-        setOrders(activeOrders);
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("Failed to load orders");
+    if (error) {
+      setMessage(error.message);
+      return;
     }
+
+    setOrders(data || []);
   };
 
   useEffect(() => {
@@ -45,174 +43,170 @@ function OrdersManager({ user, canEditEverything }) {
   }, []);
 
   const updateForm = (field, value) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [field]: value
+    }));
   };
+
+  const calculatedProfit =
+    Number(form.net || 0) - Number(form.cost || 0);
 
   const addOrder = async () => {
     setMessage("");
 
+    if (
+      !form.partNumber ||
+      !form.partDescriptionSeller ||
+      !form.quantity ||
+      form.cost === "" ||
+      form.net === "" ||
+      !form.dateApproved ||
+      !form.repairOrderNumber
+    ) {
+      setMessage("All order fields are required");
+      return;
+    }
+
+    const paid = Number(form.cost);
+    const charged = Number(form.net);
+    const profit = charged - paid;
+
     try {
-      const res = await fetch("http://localhost:5000/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          quantity: Number(form.quantity),
-          cost: Number(form.cost),
-          net: Number(form.net),
-          profit: Number(form.profit)
-        })
+      const { error } = await supabase.from("orders").insert({
+        part_number: form.partNumber,
+        part_description_seller: form.partDescriptionSeller,
+        quantity: Number(form.quantity),
+        cost: paid,
+        net: charged,
+        profit: profit,
+        date_approved: form.dateApproved,
+        repair_order_number: form.repairOrderNumber,
+        part_ordered: false,
+        ordered_by: "",
+        date_ordered: null,
+        received: false,
+        tested_good: false,
+        tested_by: "",
+        received_date: null
       });
 
-      const data = await res.json();
-
-      if (data.success) {
-        setForm({
-          partNumber: "",
-          partDescriptionSeller: "",
-          quantity: "",
-          cost: "",
-          net: "",
-          profit: "",
-          orderDate: "",
-          repairOrderNumber: ""
-        });
-
-        loadOrders();
-      } else {
-        setMessage(data.message || "Failed to add order");
+      if (error) {
+        setMessage(error.message);
+        return;
       }
+
+      setForm({
+        partNumber: "",
+        partDescriptionSeller: "",
+        quantity: "",
+        cost: "",
+        net: "",
+        dateApproved: "",
+        repairOrderNumber: ""
+      });
+
+      loadOrders();
     } catch (err) {
-      console.error(err);
-      setMessage("Failed to add order");
+      setMessage(String(err.message || err));
     }
   };
 
   const openOrderedPopup = (order) => {
-    setSelectedOrderedOrder(order);
-    setOrderedBy(user?.username || "");
+    setSelectedOrder(order);
+    setOrderedBy(user?.username || user?.email || "");
     setDateOrdered("");
-    setShowOrderedPopup(true);
   };
 
   const closeOrderedPopup = () => {
-    setShowOrderedPopup(false);
-    setSelectedOrderedOrder(null);
+    setSelectedOrder(null);
     setOrderedBy("");
     setDateOrdered("");
   };
 
-  const markPartOrdered = async () => {
-    if (!orderedBy.trim()) {
-      setMessage("Enter who ordered the part");
+  const markOrdered = async () => {
+    if (!selectedOrder) return;
+
+    if (!orderedBy || !dateOrdered) {
+      setMessage("Ordered by and date ordered are required");
       return;
     }
 
-    if (!dateOrdered) {
-      setMessage("Enter the date the part was ordered");
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        part_ordered: true,
+        ordered_by: orderedBy,
+        date_ordered: dateOrdered
+      })
+      .eq("id", selectedOrder.id);
+
+    if (error) {
+      setMessage(error.message);
       return;
     }
 
-    try {
-      const res = await fetch(
-        `http://localhost:5000/orders/${selectedOrderedOrder.id}/ordered`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            orderedBy,
-            dateOrdered
-          })
-        }
-      );
-
-      const data = await res.json();
-
-      if (data.success) {
-        closeOrderedPopup();
-        loadOrders();
-      } else {
-        setMessage(data.message || "Failed to mark part ordered");
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("Failed to mark part ordered");
-    }
+    closeOrderedPopup();
+    loadOrders();
   };
 
   const openReceivePopup = (order) => {
-    setSelectedReceiveOrder(order);
+    setReceiveOrder(order);
     setTestedGood(false);
-    setTestedBy(user?.username || "");
-    setShowReceivePopup(true);
+    setTestedBy(user?.username || user?.email || "");
   };
 
   const closeReceivePopup = () => {
-    setShowReceivePopup(false);
-    setSelectedReceiveOrder(null);
+    setReceiveOrder(null);
     setTestedGood(false);
     setTestedBy("");
   };
 
   const markReceived = async () => {
-    if (!testedBy.trim()) {
-      setMessage("Enter who tested it");
+    if (!receiveOrder) return;
+
+    if (!testedBy) {
+      setMessage("Tested by is required");
       return;
     }
 
-    try {
-      const res = await fetch(
-        `http://localhost:5000/orders/${selectedReceiveOrder.id}/received`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            testedGood,
-            testedBy
-          })
-        }
-      );
+    const receivedDate = new Date().toISOString();
 
-      const data = await res.json();
+    await supabase
+      .from("orders")
+      .update({
+        received: true,
+        tested_good: testedGood,
+        tested_by: testedBy,
+        received_date: receivedDate
+      })
+      .eq("id", receiveOrder.id);
 
-      if (data.success) {
-        closeReceivePopup();
-        loadOrders();
-      } else {
-        setMessage(data.message || "Failed to mark received");
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("Failed to mark received");
-    }
+    await supabase.from("parts").insert({
+      name: receiveOrder.part_description_seller,
+      quantity: receiveOrder.quantity,
+      date_received: receivedDate,
+      source_order_id: receiveOrder.id,
+      part_number: receiveOrder.part_number,
+      repair_order_number: receiveOrder.repair_order_number
+    });
+
+    closeReceivePopup();
+    loadOrders();
   };
 
   const deleteOrder = async (id) => {
     if (!canEditEverything) return;
 
-    try {
-      const res = await fetch(`http://localhost:5000/orders/${id}`, {
-        method: "DELETE"
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        loadOrders();
-      } else {
-        setMessage(data.message || "Failed to delete order");
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("Failed to delete order");
-    }
+    await supabase.from("orders").delete().eq("id", id);
+    loadOrders();
   };
 
   return (
     <div>
       <h2>Orders</h2>
 
-      <div style={{ display: "grid", gap: 8, maxWidth: 500 }}>
+      <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
         <input
           placeholder="Part Number"
           value={form.partNumber}
@@ -222,7 +216,9 @@ function OrdersManager({ user, canEditEverything }) {
         <input
           placeholder="Part Description / Seller"
           value={form.partDescriptionSeller}
-          onChange={(e) => updateForm("partDescriptionSeller", e.target.value)}
+          onChange={(e) =>
+            updateForm("partDescriptionSeller", e.target.value)
+          }
         />
 
         <input
@@ -234,39 +230,36 @@ function OrdersManager({ user, canEditEverything }) {
 
         <input
           type="number"
-          placeholder="Cost"
+          step="0.01"
+          placeholder="What We Paid"
           value={form.cost}
           onChange={(e) => updateForm("cost", e.target.value)}
         />
 
         <input
           type="number"
-          placeholder="Net"
+          step="0.01"
+          placeholder="What We Charged"
           value={form.net}
           onChange={(e) => updateForm("net", e.target.value)}
         />
 
-        <input
-          type="number"
-          placeholder="Profit"
-          value={form.profit}
-          onChange={(e) => updateForm("profit", e.target.value)}
-        />
+        <div style={{ padding: 10, background: "#eee" }}>
+          Profit: ${calculatedProfit.toFixed(2)}
+        </div>
 
-        <label>
-          Date Approved
-          <input
-            type="date"
-            value={form.orderDate}
-            onChange={(e) => updateForm("orderDate", e.target.value)}
-            style={{ display: "block" }}
-          />
-        </label>
+        <input
+          type="date"
+          value={form.dateApproved}
+          onChange={(e) => updateForm("dateApproved", e.target.value)}
+        />
 
         <input
           placeholder="Repair Order #"
           value={form.repairOrderNumber}
-          onChange={(e) => updateForm("repairOrderNumber", e.target.value)}
+          onChange={(e) =>
+            updateForm("repairOrderNumber", e.target.value)
+          }
         />
 
         <button onClick={addOrder}>Add Order</button>
@@ -280,164 +273,45 @@ function OrdersManager({ user, canEditEverything }) {
         <thead>
           <tr>
             <th>Part #</th>
-            <th>Description / Seller</th>
+            <th>Description</th>
             <th>Qty</th>
-            <th>Cost</th>
-            <th>Net</th>
+            <th>Paid</th>
+            <th>Charged</th>
             <th>Profit</th>
-            <th>Date Approved</th>
-            <th>RO #</th>
-            <th>Ordered?</th>
-            <th>Date Ordered</th>
-            <th>Ordered By</th>
-            <th>Received</th>
-            <th>Tested By</th>
             <th>Actions</th>
           </tr>
         </thead>
 
         <tbody>
-          {orders.map((o) => (
-            <tr key={o.id}>
-              <td>{o.partNumber}</td>
-              <td>{o.partDescriptionSeller}</td>
-              <td>{o.quantity}</td>
-              <td>${Number(o.cost || 0).toFixed(2)}</td>
-              <td>${Number(o.net || 0).toFixed(2)}</td>
-              <td>${Number(o.profit || 0).toFixed(2)}</td>
-              <td>{o.orderDate || "-"}</td>
-              <td>{o.repairOrderNumber}</td>
-              <td>{o.partOrdered ? "Yes" : "No"}</td>
-              <td>{o.dateOrdered || "-"}</td>
-              <td>{o.orderedBy || "-"}</td>
-              <td>{o.received ? "Yes" : "No"}</td>
-              <td>{o.testedBy || "-"}</td>
+          {orders.map((order) => {
+            const paid = Number(order.cost || 0);
+            const charged = Number(order.net || 0);
+            const profit = charged - paid;
 
-              <td>
-                {!o.partOrdered && (
-                  <button onClick={() => openOrderedPopup(o)}>
+            return (
+              <tr key={order.id}>
+                <td>{order.part_number}</td>
+                <td>{order.part_description_seller}</td>
+                <td>{order.quantity}</td>
+                <td>${paid.toFixed(2)}</td>
+                <td>${charged.toFixed(2)}</td>
+                <td>${profit.toFixed(2)}</td>
+                <td>
+                  <button onClick={() => openOrderedPopup(order)}>
                     Mark Ordered
                   </button>
-                )}
 
-                {o.partOrdered && !o.received && (
-                  <button onClick={() => openReceivePopup(o)}>
-                    Received
-                  </button>
-                )}
-
-                {canEditEverything && (
-                  <button
-                    onClick={() => deleteOrder(o.id)}
-                    style={{ marginLeft: 6 }}
-                  >
-                    Delete
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-
-          {orders.length === 0 && (
-            <tr>
-              <td colSpan="14" style={{ textAlign: "center" }}>
-                No active orders found.
-              </td>
-            </tr>
-          )}
+                  {canEditEverything && (
+                    <button onClick={() => deleteOrder(order.id)}>
+                      Delete
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-
-      {showOrderedPopup && selectedOrderedOrder && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center"
-          }}
-        >
-          <div style={{ background: "white", padding: 20, width: 400 }}>
-            <h3>Mark Part Ordered</h3>
-
-            <p>
-              <strong>Part:</strong> {selectedOrderedOrder.partNumber}
-            </p>
-
-            <label>
-              Date Ordered
-              <input
-                type="date"
-                value={dateOrdered}
-                onChange={(e) => setDateOrdered(e.target.value)}
-                style={{ display: "block", width: "100%", marginBottom: 10 }}
-              />
-            </label>
-
-            <input
-              placeholder="Ordered By"
-              value={orderedBy}
-              onChange={(e) => setOrderedBy(e.target.value)}
-              style={{ width: "100%", marginBottom: 10 }}
-            />
-
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <button onClick={markPartOrdered}>Save Ordered</button>
-              <button onClick={closeOrderedPopup}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showReceivePopup && selectedReceiveOrder && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center"
-          }}
-        >
-          <div style={{ background: "white", padding: 20, width: 400 }}>
-            <h3>Receive Part</h3>
-
-            <p>
-              <strong>Part:</strong> {selectedReceiveOrder.partNumber}
-            </p>
-
-            <label>
-              <input
-                type="checkbox"
-                checked={testedGood}
-                onChange={(e) => setTestedGood(e.target.checked)}
-              />
-              Tested Good
-            </label>
-
-            <input
-              placeholder="Tested By"
-              value={testedBy}
-              onChange={(e) => setTestedBy(e.target.value)}
-              style={{ width: "100%", marginTop: 10, marginBottom: 10 }}
-            />
-
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <button onClick={markReceived}>Save Received</button>
-              <button onClick={closeReceivePopup}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
