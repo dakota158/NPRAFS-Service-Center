@@ -36,8 +36,17 @@
       }
     ],
     "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "NPRAFS Service Center",
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,
@@ -60,12 +69,14 @@
       {
         "provider": "github",
         "owner": "dakota158",
-        "repo": "NPRAFS_Service_Center"
+        "repo": "NPRAFS_Service_Center",
+        "releaseType": "release"
       }
     ]
   },
   "dependencies": {
-    "electron-updater": "^6.3.9",
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.8.3",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7"
   },
