@@ -65,7 +65,9 @@
     ]
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7"
   },
   "devDependencies": {
     "electron": "^28.0.0",
