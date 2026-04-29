@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
+// --- ADDED START ---
+import PdfLayoutDesigner from "./PdfLayoutDesigner";
+// --- ADDED END ---
 
 function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
   const role = user?.role || "Tech";
@@ -10,6 +13,10 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
   const [message, setMessage] = useState("");
   const [laborRates, setLaborRates] = useState([]);
   const [markupTiers, setMarkupTiers] = useState([]);
+
+  // --- ADDED START ---
+  const [pdfDesignerOpen, setPdfDesignerOpen] = useState(false);
+  // --- ADDED END ---
 
   const [settings, setSettings] = useState({
     tax_rate: "0",
@@ -62,8 +69,7 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
     invoice_technician_notes_enabled: "true",
     invoice_internal_notes_enabled: "true",
     invoice_estimate_conversion_enabled: "false",
-
-    invoice_labor_enabled: "true",
+        invoice_labor_enabled: "true",
     invoice_parts_enabled: "true",
     invoice_misc_lines_enabled: "true",
     invoice_discounts_enabled: "true",
@@ -123,6 +129,11 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
     pdf_paid_stamp_text: "PAID",
     pdf_void_stamp_text: "VOID",
 
+    // --- ADDED START ---
+    pdf_layout_enabled: "false",
+    pdf_layout_json: "",
+    // --- ADDED END ---
+
     permission_invoice_create_roles: "Tech,Manager,IT,Admin,admin",
     permission_invoice_edit_roles: "Manager,IT,Admin,admin",
     permission_invoice_delete_roles: "IT,Admin,admin",
@@ -143,8 +154,7 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
     audit_discount_approval_required: "false",
     audit_lock_paid_invoice_enabled: "true"
   });
-
-  useEffect(() => {
+    useEffect(() => {
     loadAllSettings();
   }, []);
 
@@ -194,16 +204,85 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
     }));
   };
 
+  // --- ADDED START ---
+  const saveSingleSetting = async (key, value) => {
+    const { error } = await supabase.from("app_settings").upsert(
+      {
+        setting_key: key,
+        setting_value: String(value ?? ""),
+        description: "System setting",
+        updated_at: new Date().toISOString()
+      },
+      {
+        onConflict: "setting_key"
+      }
+    );
+
+    if (error) {
+      setMessage(error.message);
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleSavePdfLayout = async (nextLayoutJson) => {
+    setMessage("");
+
+    setSettings((prev) => ({
+      ...prev,
+      pdf_layout_enabled: "true",
+      pdf_layout_json: nextLayoutJson
+    }));
+
+    const layoutSaved = await saveSingleSetting(
+      "pdf_layout_json",
+      nextLayoutJson
+    );
+
+    const enabledSaved = await saveSingleSetting("pdf_layout_enabled", "true");
+
+    if (!layoutSaved || !enabledSaved) return;
+
+    setMessage("PDF layout saved.");
+    setPdfDesignerOpen(false);
+    loadAllSettings();
+  };
+
+  const handleResetPdfLayout = async () => {
+    setMessage("");
+
+    setSettings((prev) => ({
+      ...prev,
+      pdf_layout_enabled: "false",
+      pdf_layout_json: ""
+    }));
+
+    const layoutSaved = await saveSingleSetting("pdf_layout_json", "");
+    const enabledSaved = await saveSingleSetting("pdf_layout_enabled", "false");
+
+    if (!layoutSaved || !enabledSaved) return;
+
+    setMessage("PDF layout reset to default.");
+    loadAllSettings();
+  };
+  // --- ADDED END ---
+
   const saveSettings = async () => {
     setMessage("");
 
     for (const key of Object.keys(settings)) {
-      const { error } = await supabase.from("app_settings").upsert({
-        setting_key: key,
-        setting_value: String(settings[key] ?? ""),
-        description: "System setting",
-        updated_at: new Date().toISOString()
-      });
+      const { error } = await supabase.from("app_settings").upsert(
+        {
+          setting_key: key,
+          setting_value: String(settings[key] ?? ""),
+          description: "System setting",
+          updated_at: new Date().toISOString()
+        },
+        {
+          onConflict: "setting_key"
+        }
+      );
 
       if (error) {
         setMessage(error.message);
@@ -214,8 +293,7 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
     setMessage("Settings saved.");
     loadAllSettings();
   };
-
-  const CheckboxSetting = ({ settingKey, label }) => (
+    const CheckboxSetting = ({ settingKey, label }) => (
     <label style={{ display: "block", marginBottom: 8 }}>
       <input
         type="checkbox"
@@ -363,8 +441,7 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
 
     loadAllSettings();
   };
-
-  const updateMarkupTierLocal = (id, field, value) => {
+    const updateMarkupTierLocal = (id, field, value) => {
     setMarkupTiers((prev) =>
       prev.map((tier) =>
         tier.id === id
@@ -440,7 +517,9 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
         <p
           style={{
             color:
-              message.includes("saved") || message.includes("deleted")
+              message.includes("saved") ||
+              message.includes("deleted") ||
+              message.includes("reset")
                 ? "green"
                 : "red",
             fontWeight: "bold"
@@ -547,426 +626,136 @@ function SettingsManager({ user, activeSettingsTab = "Settings General" }) {
           <SectionActions />
         </div>
       )}
+            {activeSettingsTab === "Settings Invoice" && (
+        <div>
+          <h3>Invoice Behavior</h3>
+
+          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
+            <TextSetting settingKey="invoice_title" label="Invoice Title" />
+            <TextSetting settingKey="invoice_number_prefix" label="Invoice Number Prefix" />
+            <TextSetting
+              settingKey="invoice_next_number"
+              label="Next Invoice Number"
+              type="number"
+            />
+            <TextSetting
+              settingKey="invoice_statuses"
+              label="Invoice Statuses"
+              placeholder="Draft,Sent,Paid,Partial,Void"
+            />
+            <TextSetting
+              settingKey="invoice_payment_methods"
+              label="Payment Methods"
+              placeholder="Cash,Check,Credit Card"
+            />
+            <TextSetting
+              settingKey="invoice_default_payment_terms"
+              label="Default Payment Terms"
+            />
+          </div>
+
+          <label style={{ display: "block", marginTop: 12 }}>
+            Invoice Disclaimer / Terms
+            <textarea
+              value={settings.invoice_disclaimer || ""}
+              onChange={(e) => updateSetting("invoice_disclaimer", e.target.value)}
+              style={{
+                width: "100%",
+                minHeight: 120,
+                padding: 8,
+                boxSizing: "border-box",
+                marginTop: 4
+              }}
+            />
+          </label>
+
+          <SectionActions />
+        </div>
+      )}
 
       {activeSettingsTab === "Settings PDF" && (
         <div>
           <h3>PDF Layout Customization</h3>
 
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr 1fr" }}>
-            <label>
-              Primary Color
+          {/* --- ADDED START --- */}
+          <h4>Advanced Layout Designer</h4>
+
+          <div
+            style={{
+              border: "1px solid #ddd",
+              padding: 12,
+              marginBottom: 16,
+              background: "#f9fafb"
+            }}
+          >
+            <label style={{ display: "block", marginBottom: 10 }}>
               <input
-                type="color"
-                value={settings.pdf_primary_color || "#1f2937"}
-                onChange={(e) => updateSetting("pdf_primary_color", e.target.value)}
-                style={{ width: "100%" }}
-              />
+                type="checkbox"
+                checked={settings.pdf_layout_enabled === "true"}
+                onChange={(e) =>
+                  updateSetting("pdf_layout_enabled", String(e.target.checked))
+                }
+              />{" "}
+              Enable Custom PDF Layout
             </label>
 
-            <label>
-              Accent Color
-              <input
-                type="color"
-                value={settings.pdf_accent_color || "#e5e7eb"}
-                onChange={(e) => updateSetting("pdf_accent_color", e.target.value)}
-                style={{ width: "100%" }}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setPdfDesignerOpen(true)}>
+                Open PDF Layout Designer
+              </button>
+
+              <button type="button" onClick={handleResetPdfLayout}>
+                Reset PDF Layout
+              </button>
+            </div>
+
+            <p style={{ fontSize: 12, color: "#555", marginTop: 10 }}>
+              Drag & drop layout elements. Saving will automatically enable custom layout.
+            </p>
+
+            <label style={{ display: "block", marginTop: 10 }}>
+              Layout JSON (optional manual edit)
+              <textarea
+                value={settings.pdf_layout_json || ""}
+                onChange={(e) =>
+                  updateSetting("pdf_layout_json", e.target.value)
+                }
+                style={{
+                  width: "100%",
+                  minHeight: 120,
+                  fontFamily: "monospace"
+                }}
               />
             </label>
-
-            <label>
-              Text Color
-              <input
-                type="color"
-                value={settings.pdf_text_color || "#111827"}
-                onChange={(e) => updateSetting("pdf_text_color", e.target.value)}
-                style={{ width: "100%" }}
-              />
-            </label>
-
-            <SelectSetting
-              settingKey="pdf_font_family"
-              label="Font"
-              options={[
-                { value: "helvetica", label: "Helvetica" },
-                { value: "times", label: "Times" },
-                { value: "courier", label: "Courier" }
-              ]}
-            />
-
-            <SelectSetting
-              settingKey="pdf_header_style"
-              label="Header Style"
-              options={[
-                { value: "classic", label: "Classic" },
-                { value: "centered", label: "Centered" },
-                { value: "boxed", label: "Boxed" }
-              ]}
-            />
-
-            <SelectSetting
-              settingKey="pdf_paper_size"
-              label="Paper Size"
-              options={[
-                { value: "letter", label: "Letter" },
-                { value: "a4", label: "A4" }
-              ]}
-            />
-
-            <SelectSetting
-              settingKey="pdf_orientation"
-              label="Orientation"
-              options={[
-                { value: "portrait", label: "Portrait" },
-                { value: "landscape", label: "Landscape" }
-              ]}
-            />
-
-            <SelectSetting
-              settingKey="pdf_logo_position"
-              label="Logo Position"
-              options={[
-                { value: "left", label: "Left" },
-                { value: "center", label: "Center" },
-                { value: "right", label: "Right" }
-              ]}
-            />
-
-            <SelectSetting
-              settingKey="pdf_footer_style"
-              label="Footer Style"
-              options={[
-                { value: "simple", label: "Simple" },
-                { value: "centered", label: "Centered" },
-                { value: "none", label: "None" }
-              ]}
-            />
-
-            <TextSetting settingKey="pdf_logo_width" label="Logo Width" type="number" />
-            <TextSetting settingKey="pdf_title_size" label="Invoice Title Size" type="number" />
-            <TextSetting settingKey="pdf_company_size" label="Company Name Size" type="number" />
-            <TextSetting settingKey="pdf_body_size" label="Body Font Size" type="number" />
-            <TextSetting settingKey="pdf_table_size" label="Table Font Size" type="number" />
-            <TextSetting settingKey="pdf_terms_title" label="Terms Title" />
+          </div>
+          {/* --- ADDED END --- */}
+                    <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr 1fr" }}>
+            <TextSetting settingKey="pdf_title_size" label="Title Size" type="number" />
+            <TextSetting settingKey="pdf_company_size" label="Company Size" type="number" />
+            <TextSetting settingKey="pdf_body_size" label="Body Size" type="number" />
+            <TextSetting settingKey="pdf_table_size" label="Table Size" type="number" />
             <TextSetting settingKey="pdf_footer_text" label="Footer Text" />
-            <TextSetting settingKey="pdf_paid_stamp_text" label="Paid Stamp Text" />
-            <TextSetting settingKey="pdf_void_stamp_text" label="Void Stamp Text" />
           </div>
 
-          <h4>PDF Visibility</h4>
-          <CheckboxSetting settingKey="invoice_show_logo" label="Show Logo" />
-          <CheckboxSetting settingKey="invoice_show_website" label="Show Website" />
-          <CheckboxSetting settingKey="invoice_show_customer_email" label="Show Customer Email" />
-          <CheckboxSetting settingKey="invoice_show_vehicle_vin" label="Show Vehicle VIN" />
-          <CheckboxSetting settingKey="invoice_show_terms" label="Show Terms / Disclaimer" />
-          <CheckboxSetting settingKey="pdf_show_company_address" label="Show Company Address" />
-          <CheckboxSetting settingKey="pdf_show_company_phone" label="Show Company Phone" />
-          <CheckboxSetting settingKey="pdf_show_company_email" label="Show Company Email" />
-          <CheckboxSetting settingKey="pdf_show_labor_rate" label="Show Labor Rate Column" />
-          <CheckboxSetting settingKey="pdf_show_part_unit_price" label="Show Part Unit Price Column" />
-          <CheckboxSetting settingKey="pdf_show_part_markup" label="Show Part Markup Column" />
-          <CheckboxSetting settingKey="pdf_show_part_cost" label="Show Part Cost Column" />
-          <CheckboxSetting settingKey="pdf_show_tax_breakdown" label="Show Tax Breakdown" />
+          <h4>Visibility</h4>
+          <CheckboxSetting settingKey="pdf_show_labor_rate" label="Show Labor Rate" />
+          <CheckboxSetting settingKey="pdf_show_part_unit_price" label="Show Part Price" />
+          <CheckboxSetting settingKey="pdf_show_part_markup" label="Show Markup" />
           <CheckboxSetting settingKey="pdf_show_shop_fee" label="Show Shop Fee" />
-          <CheckboxSetting settingKey="pdf_show_technician_name" label="Show Technician Name" />
-          <CheckboxSetting settingKey="pdf_show_service_advisor" label="Show Service Advisor" />
-          <CheckboxSetting settingKey="pdf_show_signature_line" label="Show Signature Line" />
-          <CheckboxSetting settingKey="pdf_show_payment_terms" label="Show Payment Terms" />
           <CheckboxSetting settingKey="pdf_show_footer" label="Show Footer" />
 
           <SectionActions />
         </div>
       )}
-
-      {activeSettingsTab === "Settings Features" && (
-        <div>
-          <h3>Feature Toggles</h3>
-
-          <CheckboxSetting settingKey="invoice_labor_enabled" label="Enable Labor Lines" />
-          <CheckboxSetting settingKey="invoice_parts_enabled" label="Enable Parts Lines" />
-          <CheckboxSetting settingKey="invoice_misc_lines_enabled" label="Enable Miscellaneous Lines" />
-          <CheckboxSetting settingKey="invoice_discounts_enabled" label="Enable Discounts" />
-          <CheckboxSetting settingKey="invoice_coupons_enabled" label="Enable Coupons / Promos" />
-          <CheckboxSetting settingKey="invoice_environmental_fee_enabled" label="Enable Environmental Fees" />
-          <CheckboxSetting settingKey="invoice_hazardous_waste_fee_enabled" label="Enable Hazardous Waste Fee" />
-          <CheckboxSetting settingKey="invoice_towing_fee_enabled" label="Enable Towing Fee" />
-          <CheckboxSetting settingKey="invoice_diagnostic_fee_enabled" label="Enable Diagnostic Fee" />
-          <CheckboxSetting settingKey="invoice_storage_fee_enabled" label="Enable Storage Fee" />
-          <CheckboxSetting settingKey="invoice_core_charges_enabled" label="Enable Core Charges" />
-          <CheckboxSetting settingKey="invoice_part_returns_enabled" label="Enable Part Returns / Credits" />
-          <CheckboxSetting settingKey="invoice_negative_lines_enabled" label="Allow Negative Line Items" />
-          <CheckboxSetting settingKey="invoice_zero_dollar_lines_enabled" label="Allow Zero-Dollar Line Items" />
-          <CheckboxSetting settingKey="invoice_labor_description_required" label="Require Labor Descriptions" />
-          <CheckboxSetting settingKey="invoice_part_description_required" label="Require Parts Descriptions" />
-          <CheckboxSetting settingKey="invoice_labor_rate_override_enabled" label="Allow Labor Rate Override" />
-          <CheckboxSetting settingKey="invoice_markup_override_enabled" label="Allow Markup Override" />
-          <CheckboxSetting settingKey="invoice_sale_price_override_enabled" label="Allow Sale Price Override" />
-          <CheckboxSetting settingKey="invoice_show_internal_cost_manager_admin_only" label="Show Internal Part Cost To Manager/Admin Only" />
-
-          <SectionActions />
-        </div>
-      )}
-
-      {activeSettingsTab === "Settings Labor" && (
-        <div>
-          <h3>Labor Rates</h3>
-
-          <button type="button" onClick={addLaborRate}>
-            Add Labor Rate
-          </button>
-
-          <table
-            border="1"
-            cellPadding="8"
-            style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}
-          >
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Hourly Rate</th>
-                <th>Description</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {laborRates.map((rate) => (
-                <tr key={rate.id}>
-                  <td>
-                    <input
-                      value={rate.name || ""}
-                      onChange={(e) =>
-                        updateLaborRateLocal(rate.id, "name", e.target.value)
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </td>
-
-                  <td>
-                    <input
-                      type="number"
-                      value={rate.hourly_rate || 0}
-                      onChange={(e) =>
-                        updateLaborRateLocal(
-                          rate.id,
-                          "hourly_rate",
-                          e.target.value
-                        )
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </td>
-
-                  <td>
-                    <input
-                      value={rate.description || ""}
-                      onChange={(e) =>
-                        updateLaborRateLocal(
-                          rate.id,
-                          "description",
-                          e.target.value
-                        )
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </td>
-
-                  <td>
-                    <button type="button" onClick={() => saveLaborRate(rate)}>
-                      Save
-                    </button>{" "}
-                    <button type="button" onClick={() => deleteLaborRate(rate.id)}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-
-              {laborRates.length === 0 && (
-                <tr>
-                  <td colSpan="4" style={{ textAlign: "center" }}>
-                    No labor rates found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {activeSettingsTab === "Settings Markup" && (
-        <div>
-          <h3>Parts Markup Tiers</h3>
-
-          <button type="button" onClick={addMarkupTier}>
-            Add Markup Tier
-          </button>
-
-          <table
-            border="1"
-            cellPadding="8"
-            style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}
-          >
-            <thead>
-              <tr>
-                <th>Minimum Cost</th>
-                <th>Maximum Cost</th>
-                <th>Markup %</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {markupTiers.map((tier) => (
-                <tr key={tier.id}>
-                  <td>
-                    <input
-                      type="number"
-                      value={tier.min ?? 0}
-                      onChange={(e) =>
-                        updateMarkupTierLocal(tier.id, "min", e.target.value)
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </td>
-
-                  <td>
-                    <input
-                      type="number"
-                      value={tier.max ?? ""}
-                      onChange={(e) =>
-                        updateMarkupTierLocal(tier.id, "max", e.target.value)
-                      }
-                      placeholder="Blank = no max"
-                      style={{ width: "100%" }}
-                    />
-                  </td>
-
-                  <td>
-                    <input
-                      type="number"
-                      value={tier.percent ?? 0}
-                      onChange={(e) =>
-                        updateMarkupTierLocal(tier.id, "percent", e.target.value)
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </td>
-
-                  <td>
-                    <button type="button" onClick={() => saveMarkupTier(tier)}>
-                      Save
-                    </button>{" "}
-                    <button type="button" onClick={() => deleteMarkupTier(tier.id)}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-
-              {markupTiers.length === 0 && (
-                <tr>
-                  <td colSpan="4" style={{ textAlign: "center" }}>
-                    No markup tiers found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {activeSettingsTab === "Settings Tax" && (
-        <div>
-          <h3>Tax Settings</h3>
-
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
-            <TextSetting settingKey="tax_label" label="Tax Label" />
-            <TextSetting settingKey="tax_rate" label="Tax Rate %" type="number" />
-          </div>
-
-          <h4>Tax Rules</h4>
-          <CheckboxSetting settingKey="tax_enabled" label="Enable Tax" />
-          <CheckboxSetting settingKey="tax_labor_enabled" label="Tax Labor" />
-          <CheckboxSetting settingKey="tax_parts_enabled" label="Tax Parts" />
-          <CheckboxSetting settingKey="tax_shop_fee_enabled" label="Tax Shop Fee" />
-          <CheckboxSetting settingKey="tax_exempt_enabled" label="Allow Tax-Exempt Customer Option" />
-          <CheckboxSetting settingKey="tax_exempt_reason_required" label="Require Tax-Exempt Reason" />
-
-          <SectionActions />
-        </div>
-      )}
-
-      {activeSettingsTab === "Settings Shop Fees" && (
-        <div>
-          <h3>Shop Fee Settings</h3>
-
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
-            <TextSetting settingKey="shop_fee_label" label="Shop Fee Label" />
-
-            <SelectSetting
-              settingKey="shop_fee_type"
-              label="Shop Fee Type"
-              options={[
-                { value: "percent", label: "Percent of Labor" },
-                { value: "flat", label: "Flat Fee" }
-              ]}
-            />
-
-            <TextSetting settingKey="shop_fee_value" label="Shop Fee Value" type="number" />
-            <TextSetting settingKey="shop_fee_minimum" label="Minimum Shop Fee" type="number" />
-            <TextSetting settingKey="shop_fee_maximum" label="Maximum Shop Fee / Cap" type="number" />
-          </div>
-
-          <h4>Shop Fee Rules</h4>
-          <CheckboxSetting settingKey="shop_fee_enabled" label="Enable Shop Fee" />
-          <CheckboxSetting settingKey="shop_fee_taxable" label="Shop Fee Is Taxable" />
-          <CheckboxSetting settingKey="shop_fee_override_enabled" label="Allow Shop Fee Override Per Invoice" />
-
-          <SectionActions />
-        </div>
-      )}
-
-      {activeSettingsTab === "Settings Permissions" && (
-        <div>
-          <h3>Role Permission Settings</h3>
-          <p>
-            Use comma-separated role names. Example:{" "}
-            <strong>Tech,Manager,IT,Admin,admin</strong>
-          </p>
-
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
-            <TextSetting settingKey="permission_invoice_create_roles" label="Can Create Invoices" />
-            <TextSetting settingKey="permission_invoice_edit_roles" label="Can Edit Invoices" />
-            <TextSetting settingKey="permission_invoice_delete_roles" label="Can Delete Invoices" />
-            <TextSetting settingKey="permission_invoice_void_roles" label="Can Void Invoices" />
-            <TextSetting settingKey="permission_labor_override_roles" label="Can Override Labor Rates" />
-            <TextSetting settingKey="permission_markup_override_roles" label="Can Override Markup" />
-            <TextSetting settingKey="permission_view_cost_profit_roles" label="Can View Cost / Profit" />
-            <TextSetting settingKey="permission_pdf_generate_roles" label="Can Generate PDFs" />
-            <TextSetting settingKey="permission_invoice_settings_roles" label="Can Change Invoice Settings" />
-          </div>
-
-          <SectionActions />
-        </div>
-      )}
-
-      {activeSettingsTab === "Settings Audit" && (
-        <div>
-          <h3>Audit / Security Settings</h3>
-
-          <CheckboxSetting settingKey="audit_invoice_create_enabled" label="Log Invoice Creation" />
-          <CheckboxSetting settingKey="audit_invoice_edit_enabled" label="Log Invoice Edits" />
-          <CheckboxSetting settingKey="audit_invoice_pdf_enabled" label="Log PDF Generation" />
-          <CheckboxSetting settingKey="audit_invoice_delete_enabled" label="Log Invoice Deletion" />
-          <CheckboxSetting settingKey="audit_invoice_void_enabled" label="Log Invoice Voiding" />
-          <CheckboxSetting settingKey="audit_price_override_enabled" label="Log Price Overrides" />
-          <CheckboxSetting settingKey="audit_override_reason_required" label="Require Reason For Overrides" />
-          <CheckboxSetting settingKey="audit_discount_approval_required" label="Require Manager/Admin Approval For Discounts" />
-          <CheckboxSetting settingKey="audit_lock_paid_invoice_enabled" label="Lock Invoice After Marked Paid" />
-
-          <SectionActions />
-        </div>
-      )}
+            {/* --- ADDED START --- */}
+      <PdfLayoutDesigner
+        open={pdfDesignerOpen}
+        onClose={() => setPdfDesignerOpen(false)}
+        layoutJson={settings.pdf_layout_json}
+        onSave={handleSavePdfLayout}
+        onResetDefault={handleResetPdfLayout}
+      />
+      {/* --- ADDED END --- */}
     </div>
   );
 }

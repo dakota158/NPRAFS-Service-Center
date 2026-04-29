@@ -4,6 +4,7 @@
   "description": "NPRAFS Service Center inventory and repair system",
   "author": "Dakota Switzer",
   "main": "electron/main.js",
+  "private": true,
   "scripts": {
     "start": "electron .",
     "build-frontend": "cd frontend && npm install && npm run build",
@@ -30,18 +31,23 @@
       {
         "from": "backend",
         "to": "backend",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "dakota158",
+        "repo": "NPRAFS-Service-Center",
+        "private": false,
+        "releaseType": "release"
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         }
       ],
       "icon": "build/icon.ico",
@@ -64,15 +70,7 @@
       "installerHeader": "build/installer-header.bmp",
       "uninstallDisplayName": "NPRAFS Service Center",
       "deleteAppDataOnUninstall": false
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "dakota158",
-        "repo": "NPRAFS_Service_Center",
-        "releaseType": "release"
-      }
-    ]
+    }
   },
   "dependencies": {
     "electron-log": "^5.4.3",

@@ -285,6 +285,19 @@ function InvoiceManager({ user }) {
   const generatePdf = async () => {
     const doc = new jsPDF("p", "pt", "letter");
 
+    // --- ADDED START ---
+    let customLayout = null;
+
+    try {
+      if (settings.pdf_layout_enabled === "true" && settings.pdf_layout_json) {
+        customLayout = JSON.parse(settings.pdf_layout_json);
+      }
+    } catch (err) {
+      console.warn("Invalid PDF layout JSON. Default PDF layout will be used.", err);
+      customLayout = null;
+    }
+    // --- ADDED END ---
+
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 40;
@@ -322,6 +335,43 @@ function InvoiceManager({ user }) {
     const invoiceTitle = settings.invoice_title || "INVOICE";
 
     let y = 40;
+
+    // --- ADDED START ---
+    const getLayoutItem = (key, fallback = {}) => {
+      if (!customLayout) return fallback;
+
+      if (customLayout[key]) return { ...fallback, ...customLayout[key] };
+
+      if (Array.isArray(customLayout.elements)) {
+        const found = customLayout.elements.find((item) => item.id === key);
+        if (found) return { ...fallback, ...found };
+      }
+
+      return fallback;
+    };
+
+    const getLayoutNumber = (value, fallback) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : fallback;
+    };
+
+    const getLayoutX = (key, fallback) => {
+      const item = getLayoutItem(key, {});
+      return getLayoutNumber(item.x, fallback);
+    };
+
+    const getLayoutY = (key, fallback) => {
+      const item = getLayoutItem(key, {});
+      return getLayoutNumber(item.y, fallback);
+    };
+
+    const getLayoutWidth = (key, fallback) => {
+      const item = getLayoutItem(key, {});
+      return getLayoutNumber(item.width, fallback);
+    };
+
+    const useCustomPdfLayout = Boolean(customLayout);
+    // --- ADDED END ---
 
     doc.setFont(fontFamily, "normal");
     doc.setTextColor(textColor[0], textColor[1], textColor[2]);
@@ -456,8 +506,16 @@ function InvoiceManager({ user }) {
     doc.setTextColor(textColor[0], textColor[1], textColor[2]);
     doc.setFont(fontFamily, "bold");
     doc.setFontSize(13);
-    doc.text("Bill To", margin, y);
-    doc.text("Vehicle", pageWidth / 2 + 20, y);
+
+    // --- ADDED START ---
+    const billToX = getLayoutX("bill_to_block", margin);
+    const billToY = getLayoutY("bill_to_block", y);
+    const vehicleX = getLayoutX("vehicle_block", pageWidth / 2 + 20);
+    const vehicleY = getLayoutY("vehicle_block", y);
+    // --- ADDED END ---
+
+    doc.text("Bill To", billToX, billToY);
+    doc.text("Vehicle", vehicleX, vehicleY);
 
     y += 18;
 
@@ -484,19 +542,32 @@ function InvoiceManager({ user }) {
     ].filter(Boolean);
 
     customerLines.forEach((line, index) => {
-      doc.text(String(line), margin, y + index * 14);
+      doc.text(String(line), billToX, billToY + 18 + index * 14);
     });
 
     vehicleLines.forEach((line, index) => {
-      doc.text(String(line), pageWidth / 2 + 20, y + index * 14);
+      doc.text(String(line), vehicleX, vehicleY + 18 + index * 14);
     });
 
     y += Math.max(customerLines.length, vehicleLines.length) * 14 + 30;
 
     doc.setFont(fontFamily, "bold");
     doc.setFontSize(14);
-    doc.text("Labor", margin, y);
-    y += 10;
+
+    // --- ADDED START ---
+    const laborTitleX = getLayoutX("labor_title", margin);
+    const laborTitleY = getLayoutY("labor_title", y);
+    doc.text("Labor", laborTitleX, laborTitleY);
+
+    const laborTableY = getLayoutY("labor_table", laborTitleY + 10);
+    const laborTableX = getLayoutX("labor_table", margin);
+    const laborTableWidth = getLayoutWidth(
+      "labor_table",
+      pageWidth - margin * 2
+    );
+
+    y = laborTableY;
+    // --- ADDED END ---
 
     const laborHead = showLaborRate
       ? [["Description", "Rate", "Hours", "Total"]]
@@ -528,7 +599,14 @@ function InvoiceManager({ user }) {
 
     autoTable(doc, {
       startY: y,
-      margin: { left: margin, right: margin },
+      // --- ADDED START ---
+      margin: useCustomPdfLayout
+        ? {
+            left: laborTableX,
+            right: Math.max(20, pageWidth - laborTableX - laborTableWidth)
+          }
+        : { left: margin, right: margin },
+      // --- ADDED END ---
       head: laborHead,
       body: laborBody,
       styles: {
@@ -550,8 +628,21 @@ function InvoiceManager({ user }) {
 
     doc.setFont(fontFamily, "bold");
     doc.setFontSize(14);
-    doc.text("Parts", margin, y);
-    y += 10;
+
+    // --- ADDED START ---
+    const partsTitleX = getLayoutX("parts_title", margin);
+    const partsTitleY = getLayoutY("parts_title", y);
+    doc.text("Parts", partsTitleX, partsTitleY);
+
+    const partsTableY = getLayoutY("parts_table", partsTitleY + 10);
+    const partsTableX = getLayoutX("parts_table", margin);
+    const partsTableWidth = getLayoutWidth(
+      "parts_table",
+      pageWidth - margin * 2
+    );
+
+    y = partsTableY;
+    // --- ADDED END ---
 
     const partHead = ["Description", "Qty"];
 
@@ -591,7 +682,14 @@ function InvoiceManager({ user }) {
 
     autoTable(doc, {
       startY: y,
-      margin: { left: margin, right: margin },
+      // --- ADDED START ---
+      margin: useCustomPdfLayout
+        ? {
+            left: partsTableX,
+            right: Math.max(20, pageWidth - partsTableX - partsTableWidth)
+          }
+        : { left: margin, right: margin },
+      // --- ADDED END ---
       head: [partHead],
       body: partBody,
       styles: {
@@ -611,8 +709,18 @@ function InvoiceManager({ user }) {
 
     y = doc.lastAutoTable.finalY + 25;
 
-    const totalsX = pageWidth - margin - 230;
-    const valueX = pageWidth - margin;
+    // --- ADDED START ---
+    const totalsBlock = getLayoutItem("totals_block", {
+      x: pageWidth - margin - 230,
+      y,
+      width: 230
+    });
+
+    const totalsX = getLayoutNumber(totalsBlock.x, pageWidth - margin - 230);
+    const totalsWidth = getLayoutNumber(totalsBlock.width, 230);
+    const valueX = totalsX + totalsWidth;
+    y = getLayoutNumber(totalsBlock.y, y);
+    // --- ADDED END ---
 
     const totalLine = (label, value, bold = false) => {
       doc.setFont(fontFamily, bold ? "bold" : "normal");
@@ -650,7 +758,15 @@ function InvoiceManager({ user }) {
 
       doc.setFont(fontFamily, "bold");
       doc.setFontSize(12);
-      doc.text(settings.pdf_terms_title || "Terms / Disclaimer", margin, y);
+
+      // --- ADDED START ---
+      const termsX = getLayoutX("terms_block", margin);
+      const termsY = getLayoutY("terms_block", y);
+      const termsWidth = getLayoutWidth("terms_block", pageWidth - margin * 2);
+
+      y = termsY;
+      doc.text(settings.pdf_terms_title || "Terms / Disclaimer", termsX, y);
+      // --- ADDED END ---
 
       y += 16;
 
@@ -659,10 +775,10 @@ function InvoiceManager({ user }) {
 
       const disclaimerLines = doc.splitTextToSize(
         String(settings.invoice_disclaimer),
-        pageWidth - margin * 2
+        termsWidth
       );
 
-      doc.text(disclaimerLines, margin, y);
+      doc.text(disclaimerLines, termsX, y);
     }
 
     if (showFooter) {
