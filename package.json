@@ -1,6 +1,6 @@
 {
   "name": "nprafs-service-center",
-  "version": "1.0.1",
+  "version": "1.0.5",
   "description": "NPRAFS Service Center inventory and repair system",
   "author": "Dakota Switzer",
   "main": "electron/main.js",

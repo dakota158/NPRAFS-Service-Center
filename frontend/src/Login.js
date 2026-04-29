@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { supabase } from "./supabaseClient";
+// --- ADDED START ---
+import packageJson from "../package.json";
+// --- ADDED END ---
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -182,6 +185,24 @@ function Login() {
           </p>
         )}
       </div>
+
+      {/* --- ADDED START --- */}
+      <div
+        style={{
+          position: "fixed",
+          right: 12,
+          bottom: 8,
+          zIndex: 2,
+          fontSize: 12,
+          color: "#777",
+          background: "rgba(255,255,255,0.7)",
+          padding: "3px 8px",
+          borderRadius: 6
+        }}
+      >
+        v{packageJson.version}
+      </div>
+      {/* --- ADDED END --- */}
     </div>
   );
 }
