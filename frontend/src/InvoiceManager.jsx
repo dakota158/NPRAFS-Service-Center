@@ -9,7 +9,16 @@ function InvoiceManager({ user }) {
   const [settings, setSettings] = useState({});
   const [message, setMessage] = useState("");
 
+  // --- ADDED START ---
+  const generateEstimateNumber = () => `EST-${Date.now()}`;
+  // --- ADDED END ---
+
   const [invoice, setInvoice] = useState({
+    // --- ADDED START ---
+    document_status: "Estimate",
+    estimate_number: generateEstimateNumber(),
+    repair_order_number: "",
+    // --- ADDED END ---
     invoice_number: `INV-${Date.now()}`,
     customer_name: "",
     customer_phone: "",
@@ -26,8 +35,210 @@ function InvoiceManager({ user }) {
   const [laborItems, setLaborItems] = useState([]);
   const [partItems, setPartItems] = useState([]);
 
+  // --- ADDED START ---
+  const [inventoryParts, setInventoryParts] = useState([]);
+  const [inventoryLookupMessage, setInventoryLookupMessage] = useState("");
+
+  const INVENTORY_TABLE_CANDIDATES = [
+    "inventory_parts",
+    "stock_parts",
+    "parts_inventory",
+    "parts"
+  ];
+
+  const getInventoryPartNumber = (part) =>
+    part?.part_number ||
+    part?.partNumber ||
+    part?.part_no ||
+    part?.sku ||
+    part?.stock_number ||
+    "";
+
+  const getInventoryDescription = (part) =>
+    part?.description ||
+    part?.name ||
+    part?.part_name ||
+    part?.item_name ||
+    "";
+
+  const getInventoryCost = (part) =>
+    Number(
+      part?.cost ??
+        part?.part_price ??
+        part?.price ??
+        part?.unit_cost ??
+        part?.sale_price ??
+        0
+    );
+
+  const getInventoryQuantity = (part) =>
+    Number(
+      part?.quantity ??
+        part?.qty ??
+        part?.stock_quantity ??
+        part?.quantity_on_hand ??
+        part?.on_hand ??
+        0
+    );
+
+  const normalizeInventoryPart = (part, tableName) => ({
+    ...part,
+    inventory_table_name: tableName,
+    inventory_part_id: part?.id || "",
+    part_number: getInventoryPartNumber(part),
+    description: getInventoryDescription(part),
+    part_price: getInventoryCost(part),
+    cost: getInventoryCost(part),
+    available_quantity: getInventoryQuantity(part)
+  });
+
+  const loadInventoryParts = async () => {
+    setInventoryLookupMessage("");
+
+    for (const tableName of INVENTORY_TABLE_CANDIDATES) {
+      const { data, error } = await supabase
+        .from(tableName)
+        .select("*")
+        .limit(500);
+
+      if (!error && Array.isArray(data)) {
+        setInventoryParts(
+          data.map((part) => normalizeInventoryPart(part, tableName))
+        );
+        setInventoryLookupMessage(
+          `Inventory lookup connected to ${tableName}.`
+        );
+        return;
+      }
+    }
+
+    setInventoryParts([]);
+    setInventoryLookupMessage(
+      "Inventory lookup could not find a supported inventory table. Manual parts still work."
+    );
+  };
+
+  const findInventoryPart = (value) => {
+    const lookup = String(value || "").trim().toLowerCase();
+    if (!lookup) return null;
+
+    return (
+      inventoryParts.find((part) =>
+        String(part.part_number || "").toLowerCase() === lookup
+      ) ||
+      inventoryParts.find((part) =>
+        String(part.description || "").toLowerCase().includes(lookup)
+      ) ||
+      null
+    );
+  };
+
+  const applyInventoryPartData = (part, inventoryPart) => {
+    if (!inventoryPart) return part;
+
+    const markupPercent = findMarkupPercent(inventoryPart.part_price);
+
+    return {
+      ...part,
+      part_number: inventoryPart.part_number || part.part_number || "",
+      description: inventoryPart.description || part.description || "",
+      part_price: Number(inventoryPart.part_price || 0),
+      cost: Number(inventoryPart.cost || inventoryPart.part_price || 0),
+      markup_percent: markupPercent,
+      sale_price: calculatePartSalePrice(inventoryPart.part_price, markupPercent),
+      inventory_part_id: inventoryPart.inventory_part_id || "",
+      inventory_table_name: inventoryPart.inventory_table_name || "",
+      available_quantity: Number(inventoryPart.available_quantity || 0),
+      source: "inventory"
+    };
+  };
+
+  const lookupPartByNumber = (partNumber, target = {}) => {
+    const found = findInventoryPart(partNumber);
+
+    if (!found) {
+      setInventoryLookupMessage(
+        partNumber
+          ? `No inventory match found for "${partNumber}".`
+          : "Enter a part number to search inventory."
+      );
+      return;
+    }
+
+    if (target.laborId && target.partId) {
+      setLaborItems((prev) =>
+        prev.map((labor) => {
+          if (labor.id !== target.laborId) return labor;
+
+          return {
+            ...labor,
+            parts: (labor.parts || []).map((part) =>
+              part.id === target.partId ? applyInventoryPartData(part, found) : part
+            )
+          };
+        })
+      );
+    }
+
+    if (target.partId && !target.laborId) {
+      setPartItems((prev) =>
+        prev.map((part) =>
+          part.id === target.partId ? applyInventoryPartData(part, found) : part
+        )
+      );
+    }
+
+    setInventoryLookupMessage(`Loaded part ${found.part_number} from inventory.`);
+  };
+
+  const getAllInvoiceParts = () => [
+    ...laborItems.flatMap((labor) =>
+      (labor.parts || []).map((part) => ({
+        ...part,
+        attached_labor_id: labor.id
+      }))
+    ),
+    ...partItems
+  ];
+
+  const deductInventoryForInvoice = async () => {
+    const partsToDeduct = getAllInvoiceParts().filter(
+      (part) => part.inventory_part_id && part.inventory_table_name
+    );
+
+    if (partsToDeduct.length === 0) return true;
+
+    for (const part of partsToDeduct) {
+      const currentQuantity = Number(part.available_quantity || 0);
+      const usedQuantity = Number(part.quantity || 0);
+      const nextQuantity = Math.max(0, currentQuantity - usedQuantity);
+
+      const { error } = await supabase
+        .from(part.inventory_table_name)
+        .update({
+          quantity: nextQuantity,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", part.inventory_part_id);
+
+      if (error) {
+        console.warn("Inventory deduction failed:", error);
+        setMessage(
+          `Saved, but inventory deduction failed for ${part.part_number || "a part"}: ${error.message}`
+        );
+        return false;
+      }
+    }
+
+    return true;
+  };
+  // --- ADDED END ---
+
   useEffect(() => {
     loadInvoiceData();
+    // --- ADDED START ---
+    loadInventoryParts();
+    // --- ADDED END ---
   }, []);
 
   const makeId = () =>
@@ -83,6 +294,62 @@ function InvoiceManager({ user }) {
     }));
   };
 
+  // --- ADDED START ---
+  const getSharedDocumentNumber = () =>
+    invoice.estimate_number ||
+    invoice.repair_order_number ||
+    invoice.invoice_number ||
+    generateEstimateNumber();
+
+  const generateNewEstimateNumber = () => {
+    const newNumber = generateEstimateNumber();
+
+    setInvoice((prev) => ({
+      ...prev,
+      document_status: "Estimate",
+      estimate_number: newNumber,
+      repair_order_number: newNumber,
+      invoice_number: newNumber
+    }));
+  };
+
+  const moveToEstimate = () => {
+    const sharedNumber = getSharedDocumentNumber();
+
+    setInvoice((prev) => ({
+      ...prev,
+      document_status: "Estimate",
+      estimate_number: sharedNumber,
+      repair_order_number: sharedNumber,
+      invoice_number: sharedNumber
+    }));
+  };
+
+  const moveToRepairOrder = () => {
+    const sharedNumber = getSharedDocumentNumber();
+
+    setInvoice((prev) => ({
+      ...prev,
+      document_status: "Repair Order",
+      estimate_number: sharedNumber,
+      repair_order_number: sharedNumber,
+      invoice_number: sharedNumber
+    }));
+  };
+
+  const moveToInvoice = () => {
+    const sharedNumber = getSharedDocumentNumber();
+
+    setInvoice((prev) => ({
+      ...prev,
+      document_status: "Invoice",
+      estimate_number: sharedNumber,
+      repair_order_number: sharedNumber,
+      invoice_number: sharedNumber
+    }));
+  };
+  // --- ADDED END ---
+
   const findMarkupPercent = (cost) => {
     const numericCost = Number(cost || 0);
 
@@ -99,6 +366,30 @@ function InvoiceManager({ user }) {
     return Number(tier?.percent || 0);
   };
 
+  // --- ADDED START ---
+  const calculatePartSalePrice = (partPrice, markupPercent) => {
+    return Number(partPrice || 0) * (1 + Number(markupPercent || 0) / 100);
+  };
+
+  const calculatePartTotal = (part) => {
+    return Number(part.sale_price || 0) * Number(part.quantity || 0);
+  };
+
+  const buildBlankPart = () => ({
+    id: makeId(),
+    part_number: "",
+    inventory_part_id: "",
+    inventory_table_name: "",
+    part_price: 0,
+    quantity: 1,
+    markup_percent: 0,
+    sale_price: 0,
+    description: "",
+    available_quantity: null,
+    source: "manual"
+  });
+  // --- ADDED END ---
+
   const addLaborItem = () => {
     const firstRate = laborRates[0];
 
@@ -110,7 +401,10 @@ function InvoiceManager({ user }) {
         rate_name: firstRate?.name || "",
         hourly_rate: Number(firstRate?.hourly_rate || 0),
         hours: 1,
-        description: ""
+        description: "",
+        // --- ADDED START ---
+        parts: []
+        // --- ADDED END ---
       }
     ]);
   };
@@ -146,18 +440,81 @@ function InvoiceManager({ user }) {
     setLaborItems((prev) => prev.filter((item) => item.id !== id));
   };
 
+  // --- ADDED START ---
+  const addPartToLabor = (laborId) => {
+    setLaborItems((prev) =>
+      prev.map((labor) => {
+        if (labor.id !== laborId) return labor;
+
+        return {
+          ...labor,
+          parts: [...(labor.parts || []), buildBlankPart()]
+        };
+      })
+    );
+  };
+
+  const updateLaborPartItem = (laborId, partId, field, value) => {
+    setLaborItems((prev) =>
+      prev.map((labor) => {
+        if (labor.id !== laborId) return labor;
+
+        return {
+          ...labor,
+          parts: (labor.parts || []).map((part) => {
+            if (part.id !== partId) return part;
+
+            const numericFields = [
+              "part_price",
+              "cost",
+              "quantity",
+              "markup_percent",
+              "sale_price"
+            ];
+
+            const updated = {
+              ...part,
+              [field]: numericFields.includes(field) ? Number(value || 0) : value
+            };
+
+            if (field === "part_price" || field === "cost") {
+              const markupPercent = findMarkupPercent(value);
+              updated.part_price = Number(value || 0);
+              updated.cost = Number(value || 0);
+              updated.markup_percent = markupPercent;
+              updated.sale_price = calculatePartSalePrice(value, markupPercent);
+            }
+
+            if (field === "markup_percent") {
+              updated.sale_price = calculatePartSalePrice(
+                updated.part_price ?? updated.cost,
+                value
+              );
+            }
+
+            return updated;
+          })
+        };
+      })
+    );
+  };
+
+  const removeLaborPartItem = (laborId, partId) => {
+    setLaborItems((prev) =>
+      prev.map((labor) => {
+        if (labor.id !== laborId) return labor;
+
+        return {
+          ...labor,
+          parts: (labor.parts || []).filter((part) => part.id !== partId)
+        };
+      })
+    );
+  };
+  // --- ADDED END ---
+
   const addPartItem = () => {
-    setPartItems((prev) => [
-      ...prev,
-      {
-        id: makeId(),
-        cost: 0,
-        quantity: 1,
-        markup_percent: 0,
-        sale_price: 0,
-        description: ""
-      }
-    ]);
+    setPartItems((prev) => [...prev, buildBlankPart()]);
   };
 
   const updatePartItem = (id, field, value) => {
@@ -165,28 +522,41 @@ function InvoiceManager({ user }) {
       prev.map((item) => {
         if (item.id !== id) return item;
 
+        // --- ADDED START ---
+        const numericFields = [
+          "part_price",
+          "cost",
+          "quantity",
+          "markup_percent",
+          "sale_price"
+        ];
+        // --- ADDED END ---
+
         const updated = {
           ...item,
           [field]:
-            field === "cost" ||
-            field === "quantity" ||
-            field === "markup_percent" ||
-            field === "sale_price"
+            // --- ADDED START ---
+            numericFields.includes(field)
               ? Number(value || 0)
               : value
+            // --- ADDED END ---
         };
 
-        if (field === "cost") {
+        // --- ADDED START ---
+        if (field === "part_price" || field === "cost") {
           const markupPercent = findMarkupPercent(value);
-          const salePrice = Number(value || 0) * (1 + markupPercent / 100);
-
+          updated.part_price = Number(value || 0);
+          updated.cost = Number(value || 0);
           updated.markup_percent = markupPercent;
-          updated.sale_price = salePrice;
+          updated.sale_price = calculatePartSalePrice(value, markupPercent);
         }
+        // --- ADDED END ---
 
         if (field === "markup_percent") {
-          updated.sale_price =
-            Number(item.cost || 0) * (1 + Number(value || 0) / 100);
+          updated.sale_price = calculatePartSalePrice(
+            updated.part_price ?? updated.cost,
+            value
+          );
         }
 
         return updated;
@@ -203,10 +573,24 @@ function InvoiceManager({ user }) {
     0
   );
 
+  // --- ADDED START ---
+  const groupedPartsSubtotal = laborItems.reduce(
+    (sum, labor) =>
+      sum +
+      (labor.parts || []).reduce(
+        (partSum, part) => partSum + calculatePartTotal(part),
+        0
+      ),
+    0
+  );
+  // --- ADDED END ---
+
   const partsSubtotal = partItems.reduce(
     (sum, item) =>
-      sum + Number(item.sale_price || 0) * Number(item.quantity || 0),
-    0
+      // --- ADDED START ---
+      sum + calculatePartTotal(item),
+    groupedPartsSubtotal
+    // --- ADDED END ---
   );
 
   const shopFeeType = settings.shop_fee_type || "percent";
@@ -229,6 +613,11 @@ function InvoiceManager({ user }) {
         record_id: invoiceId,
         details: {
           invoice_number: invoice.invoice_number,
+          // --- ADDED START ---
+          estimate_number: invoice.estimate_number,
+          repair_order_number: invoice.repair_order_number,
+          document_status: invoice.document_status,
+          // --- ADDED END ---
           customer_name: invoice.customer_name,
           grand_total: grandTotal
         },
@@ -242,8 +631,15 @@ function InvoiceManager({ user }) {
   const saveInvoice = async () => {
     setMessage("");
 
+    const sharedNumber = getSharedDocumentNumber();
+
     const payload = {
-      invoice_number: invoice.invoice_number,
+      // --- ADDED START ---
+      document_status: invoice.document_status,
+      estimate_number: sharedNumber,
+      repair_order_number: sharedNumber,
+      // --- ADDED END ---
+      invoice_number: sharedNumber,
       customer_name: invoice.customer_name,
       customer_phone: invoice.customer_phone,
       customer_email: invoice.customer_email,
@@ -276,9 +672,18 @@ function InvoiceManager({ user }) {
       return null;
     }
 
+    // --- ADDED START ---
+    if (
+      invoice.document_status === "Invoice" &&
+      boolSetting("inventory_auto_deduct_on_invoice_save", false)
+    ) {
+      await deductInventoryForInvoice();
+    }
+    // --- ADDED END ---
+
     await writeAuditLog(data?.id || null);
 
-    setMessage("Invoice saved.");
+    setMessage(`${invoice.document_status || "Invoice"} saved.`);
     return data?.id || null;
   };
 
@@ -327,12 +732,18 @@ function InvoiceManager({ user }) {
 
     const showLaborRate = boolSetting("pdf_show_labor_rate", true);
     const showPartUnitPrice = boolSetting("pdf_show_part_unit_price", true);
-    const showPartMarkup = boolSetting("pdf_show_part_markup", false);
     const showShopFee = boolSetting("pdf_show_shop_fee", true);
     const showFooter = boolSetting("pdf_show_footer", true);
 
     const companyName = settings.company_name || "NPRAFS Service Center";
-    const invoiceTitle = settings.invoice_title || "INVOICE";
+    const invoiceTitle =
+      // --- ADDED START ---
+      invoice.document_status === "Estimate"
+        ? settings.estimate_title || "ESTIMATE"
+        : invoice.document_status === "Repair Order"
+        ? settings.repair_order_title || "REPAIR ORDER"
+        : settings.invoice_title || "INVOICE";
+      // --- ADDED END ---
 
     let y = 40;
 
@@ -344,6 +755,11 @@ function InvoiceManager({ user }) {
 
       if (Array.isArray(customLayout.elements)) {
         const found = customLayout.elements.find((item) => item.id === key);
+        if (found) return { ...fallback, ...found };
+      }
+
+      if (Array.isArray(customLayout)) {
+        const found = customLayout.find((item) => item.id === key);
         if (found) return { ...fallback, ...found };
       }
 
@@ -373,6 +789,16 @@ function InvoiceManager({ user }) {
     const useCustomPdfLayout = Boolean(customLayout);
     // --- ADDED END ---
 
+    // --- ADDED START ---
+    const sharedPdfNumber = getSharedDocumentNumber();
+    const numberLabel =
+      invoice.document_status === "Estimate"
+        ? "Estimate #"
+        : invoice.document_status === "Repair Order"
+        ? "Repair Order #"
+        : "Invoice #";
+    // --- ADDED END ---
+
     doc.setFont(fontFamily, "normal");
     doc.setTextColor(textColor[0], textColor[1], textColor[2]);
 
@@ -390,7 +816,7 @@ function InvoiceManager({ user }) {
 
       doc.setFont(fontFamily, "normal");
       doc.setFontSize(bodySize);
-      doc.text(`Invoice #: ${invoice.invoice_number}`, pageWidth - margin, 75, {
+      doc.text(`${numberLabel}: ${sharedPdfNumber}`, pageWidth - margin, 75, {
         align: "right"
       });
       doc.text(`Date: ${invoice.invoice_date}`, pageWidth - margin, 92, {
@@ -446,7 +872,7 @@ function InvoiceManager({ user }) {
       doc.setFont(fontFamily, "normal");
       doc.setFontSize(bodySize);
       doc.text(
-        `Invoice #: ${invoice.invoice_number}    Date: ${invoice.invoice_date}`,
+        `${numberLabel}: ${sharedPdfNumber}    Date: ${invoice.invoice_date}`,
         pageWidth / 2,
         y,
         { align: "center" }
@@ -490,7 +916,7 @@ function InvoiceManager({ user }) {
 
       doc.setFont(fontFamily, "normal");
       doc.setFontSize(bodySize + 1);
-      doc.text(`Invoice #: ${invoice.invoice_number}`, pageWidth - margin, 82, {
+      doc.text(`${numberLabel}: ${sharedPdfNumber}`, pageWidth - margin, 82, {
         align: "right"
       });
       doc.text(`Date: ${invoice.invoice_date}`, pageWidth - margin, 100, {
@@ -557,7 +983,7 @@ function InvoiceManager({ user }) {
     // --- ADDED START ---
     const laborTitleX = getLayoutX("labor_title", margin);
     const laborTitleY = getLayoutY("labor_title", y);
-    doc.text("Labor", laborTitleX, laborTitleY);
+    doc.text("Labor / Parts", laborTitleX, laborTitleY);
 
     const laborTableY = getLayoutY("labor_table", laborTitleY + 10);
     const laborTableX = getLayoutX("labor_table", margin);
@@ -570,32 +996,84 @@ function InvoiceManager({ user }) {
     // --- ADDED END ---
 
     const laborHead = showLaborRate
-      ? [["Description", "Rate", "Hours", "Total"]]
-      : [["Description", "Hours", "Total"]];
+      ? [["Description", "Part #", "Rate / Price", "Hours / Qty", "Total"]]
+      : [["Description", "Part #", "Hours / Qty", "Total"]];
+
+    // --- ADDED START ---
+    const groupedBodyRows = [];
+
+    laborItems.forEach((item) => {
+      if (showLaborRate) {
+        groupedBodyRows.push([
+          `Labor - ${item.description || item.rate_name || "Labor"} - ${Number(
+            item.hours || 0
+          )} Hours`,
+          "",
+          `$${money(item.hourly_rate)}`,
+          String(Number(item.hours || 0)),
+          `$${money(Number(item.hourly_rate || 0) * Number(item.hours || 0))}`
+        ]);
+      } else {
+        groupedBodyRows.push([
+          `Labor - ${item.description || item.rate_name || "Labor"} - ${Number(
+            item.hours || 0
+          )} Hours`,
+          "",
+          String(Number(item.hours || 0)),
+          `$${money(Number(item.hourly_rate || 0) * Number(item.hours || 0))}`
+        ]);
+      }
+
+      (item.parts || []).forEach((part) => {
+        const partTotal = calculatePartTotal(part);
+
+        if (showLaborRate) {
+          groupedBodyRows.push([
+            `-- Parts - ${part.description || "Part"}`,
+            part.part_number || "",
+            showPartUnitPrice ? `$${money(part.sale_price)}` : "",
+            String(Number(part.quantity || 0)),
+            `$${money(partTotal)}`
+          ]);
+        } else {
+          groupedBodyRows.push([
+            `-- Parts - ${part.description || "Part"}`,
+            part.part_number || "",
+            String(Number(part.quantity || 0)),
+            `$${money(partTotal)}`
+          ]);
+        }
+      });
+    });
+
+    partItems.forEach((part) => {
+      const partTotal = calculatePartTotal(part);
+
+      if (showLaborRate) {
+        groupedBodyRows.push([
+          `-- Parts - ${part.description || "Unassigned Part"}`,
+          part.part_number || "",
+          showPartUnitPrice ? `$${money(part.sale_price)}` : "",
+          String(Number(part.quantity || 0)),
+          `$${money(partTotal)}`
+        ]);
+      } else {
+        groupedBodyRows.push([
+          `-- Parts - ${part.description || "Unassigned Part"}`,
+          part.part_number || "",
+          String(Number(part.quantity || 0)),
+          `$${money(partTotal)}`
+        ]);
+      }
+    });
 
     const laborBody =
-      laborItems.length > 0
-        ? laborItems.map((item) =>
-            showLaborRate
-              ? [
-                  item.description || item.rate_name || "Labor",
-                  `$${money(item.hourly_rate)}`,
-                  String(Number(item.hours || 0)),
-                  `$${money(
-                    Number(item.hourly_rate || 0) * Number(item.hours || 0)
-                  )}`
-                ]
-              : [
-                  item.description || item.rate_name || "Labor",
-                  String(Number(item.hours || 0)),
-                  `$${money(
-                    Number(item.hourly_rate || 0) * Number(item.hours || 0)
-                  )}`
-                ]
-          )
+      groupedBodyRows.length > 0
+        ? groupedBodyRows
         : showLaborRate
-        ? [["No labor items", "", "", "$0.00"]]
-        : [["No labor items", "", "$0.00"]];
+        ? [["No labor or part items", "", "", "", "$0.00"]]
+        : [["No labor or part items", "", "", "$0.00"]];
+    // --- ADDED END ---
 
     autoTable(doc, {
       startY: y,
@@ -609,89 +1087,6 @@ function InvoiceManager({ user }) {
       // --- ADDED END ---
       head: laborHead,
       body: laborBody,
-      styles: {
-        font: fontFamily,
-        fontSize: tableSize,
-        cellPadding: 6,
-        textColor
-      },
-      headStyles: {
-        fillColor: primaryColor,
-        textColor: [255, 255, 255]
-      },
-      alternateRowStyles: {
-        fillColor: accentColor
-      }
-    });
-
-    y = doc.lastAutoTable.finalY + 25;
-
-    doc.setFont(fontFamily, "bold");
-    doc.setFontSize(14);
-
-    // --- ADDED START ---
-    const partsTitleX = getLayoutX("parts_title", margin);
-    const partsTitleY = getLayoutY("parts_title", y);
-    doc.text("Parts", partsTitleX, partsTitleY);
-
-    const partsTableY = getLayoutY("parts_table", partsTitleY + 10);
-    const partsTableX = getLayoutX("parts_table", margin);
-    const partsTableWidth = getLayoutWidth(
-      "parts_table",
-      pageWidth - margin * 2
-    );
-
-    y = partsTableY;
-    // --- ADDED END ---
-
-    const partHead = ["Description", "Qty"];
-
-    if (showPartMarkup) partHead.push("Markup %");
-    if (showPartUnitPrice) partHead.push("Unit Price");
-
-    partHead.push("Total");
-
-    const partBody =
-      partItems.length > 0
-        ? partItems.map((item) => {
-            const row = [
-              item.description || "Part",
-              String(Number(item.quantity || 0))
-            ];
-
-            if (showPartMarkup) row.push(`${money(item.markup_percent)}%`);
-            if (showPartUnitPrice) row.push(`$${money(item.sale_price)}`);
-
-            row.push(
-              `$${money(
-                Number(item.sale_price || 0) * Number(item.quantity || 0)
-              )}`
-            );
-
-            return row;
-          })
-        : [
-            [
-              "No part items",
-              "",
-              ...(showPartMarkup ? [""] : []),
-              ...(showPartUnitPrice ? [""] : []),
-              "$0.00"
-            ]
-          ];
-
-    autoTable(doc, {
-      startY: y,
-      // --- ADDED START ---
-      margin: useCustomPdfLayout
-        ? {
-            left: partsTableX,
-            right: Math.max(20, pageWidth - partsTableX - partsTableWidth)
-          }
-        : { left: margin, right: margin },
-      // --- ADDED END ---
-      head: [partHead],
-      body: partBody,
       styles: {
         font: fontFamily,
         fontSize: tableSize,
@@ -744,8 +1139,14 @@ function InvoiceManager({ user }) {
 
     totalLine(`Tax (${money(taxRate)}%):`, `$${money(taxTotal)}`);
 
+    // --- ADDED START ---
+    // Move the separator line above the grand total with enough padding so it
+    // does not cut through the Grand Total text on the PDF.
+    y += 6;
     doc.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-    doc.line(totalsX, y - 6, valueX, y - 6);
+    doc.line(totalsX, y, valueX, y);
+    y += 16;
+    // --- ADDED END ---
     totalLine("Grand Total:", `$${money(grandTotal)}`, true);
 
     if (boolSetting("invoice_show_terms", true) && settings.invoice_disclaimer) {
@@ -793,14 +1194,14 @@ function InvoiceManager({ user }) {
       );
 
       doc.text(
-        `Invoice ${invoice.invoice_number}`,
+        `${invoice.document_status || "Invoice"} ${sharedPdfNumber}`,
         pageWidth - margin,
         pageHeight - 25,
         { align: "right" }
       );
     }
 
-    doc.save(`${invoice.invoice_number || "invoice"}.pdf`);
+    doc.save(`${sharedPdfNumber || "invoice"}.pdf`);
   };
 
   const saveAndGeneratePdf = async () => {
@@ -811,9 +1212,113 @@ function InvoiceManager({ user }) {
     }
   };
 
+  // --- ADDED START ---
+  const renderPartInputs = ({
+    part,
+    onChange,
+    onRemove,
+    onLookup,
+    removeLabel = "Remove Part"
+  }) => (
+    <div
+      key={part.id}
+      style={{
+        display: "grid",
+        gap: 8,
+        gridTemplateColumns: "1fr 1fr 1fr 2fr 1fr auto",
+        marginTop: 8,
+        alignItems: "start"
+      }}
+    >
+      <label style={{ display: "block" }}>
+        Part Number
+        <input
+          value={part.part_number || ""}
+          onChange={(e) => onChange(part.id, "part_number", e.target.value)}
+          onBlur={() => onLookup && onLookup(part.part_number)}
+          placeholder="Enter or scan part number"
+          list="inventory-parts-list"
+          style={{ width: "100%" }}
+        />
+        <button
+          type="button"
+          onClick={() => onLookup && onLookup(part.part_number)}
+          style={{ marginTop: 4 }}
+        >
+          Lookup
+        </button>
+      </label>
+
+      <label style={{ display: "block" }}>
+        Part Price
+        <input
+          type="number"
+          value={part.part_price ?? part.cost ?? 0}
+          onChange={(e) => onChange(part.id, "part_price", e.target.value)}
+          placeholder="Enter part price"
+          style={{ width: "100%" }}
+        />
+      </label>
+
+      <label style={{ display: "block" }}>
+        Quantity
+        <input
+          type="number"
+          value={part.quantity}
+          onChange={(e) => onChange(part.id, "quantity", e.target.value)}
+          placeholder="Enter quantity"
+          style={{ width: "100%" }}
+        />
+      </label>
+
+      <label style={{ display: "block" }}>
+        Part Description
+        <input
+          value={part.description}
+          onChange={(e) => onChange(part.id, "description", e.target.value)}
+          placeholder="Enter part description"
+          style={{ width: "100%" }}
+        />
+      </label>
+
+      <div>
+        <div>
+          <strong>Total:</strong> ${money(calculatePartTotal(part))}
+        </div>
+        <small>
+          Markup: {money(part.markup_percent)}% | Unit: ${money(part.sale_price)}
+        </small>
+      </div>
+
+      <button type="button" onClick={onRemove}>
+        {removeLabel}
+      </button>
+    </div>
+  );
+  // --- ADDED END ---
+
   return (
     <div>
       <h2>Invoices</h2>
+
+      {/* --- ADDED START --- */}
+      <datalist id="inventory-parts-list">
+        {inventoryParts.map((part) => (
+          <option
+            key={`${part.inventory_table_name}-${part.inventory_part_id}`}
+            value={part.part_number}
+          >
+            {part.description} | Qty: {part.available_quantity}
+          </option>
+        ))}
+      </datalist>
+
+      {inventoryLookupMessage && (
+        <p style={{ color: inventoryParts.length > 0 ? "#2563eb" : "#b45309" }}>
+          {inventoryLookupMessage}
+        </p>
+      )}
+      {/* --- ADDED END --- */}
 
       {message && (
         <p
@@ -826,9 +1331,61 @@ function InvoiceManager({ user }) {
         </p>
       )}
 
+      {/* --- ADDED START --- */}
+      <h3>Estimate / Repair Order / Invoice Workflow</h3>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 10,
+          gridTemplateColumns: "1fr 1fr 1fr 1fr",
+          marginBottom: 15
+        }}
+      >
+        <button type="button" onClick={generateNewEstimateNumber}>
+          Generate Estimate Number
+        </button>
+
+        <button type="button" onClick={moveToEstimate}>
+          Mark as Estimate
+        </button>
+
+        <button type="button" onClick={moveToRepairOrder}>
+          Convert to Repair Order
+        </button>
+
+        <button type="button" onClick={moveToInvoice}>
+          Convert to Invoice
+        </button>
+      </div>
+
+      <p>
+        <strong>Current Type:</strong> {invoice.document_status}
+      </p>
+      <p>
+        <strong>Shared Number:</strong> {getSharedDocumentNumber()}
+      </p>
+      {/* --- ADDED END --- */}
+
       <h3>Customer Info</h3>
 
       <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
+        {/* --- ADDED START --- */}
+        <input
+          value={invoice.estimate_number}
+          onChange={(e) => {
+            const value = e.target.value;
+            setInvoice((prev) => ({
+              ...prev,
+              estimate_number: value,
+              repair_order_number: value,
+              invoice_number: value
+            }));
+          }}
+          placeholder="Estimate / RO / Invoice Number"
+        />
+        {/* --- ADDED END --- */}
+
         <input
           value={invoice.invoice_number}
           onChange={(e) => updateInvoiceField("invoice_number", e.target.value)}
@@ -902,7 +1459,7 @@ function InvoiceManager({ user }) {
 
       <hr />
 
-      <h3>Labor</h3>
+      <h3>Labor With Attached Parts</h3>
 
       <button type="button" onClick={addLaborItem}>
         Add Labor
@@ -912,119 +1469,111 @@ function InvoiceManager({ user }) {
         <div
           key={item.id}
           style={{
-            display: "grid",
-            gap: 8,
-            gridTemplateColumns: "1.5fr 1fr 1fr 2fr auto",
-            marginTop: 8
+            border: "1px solid #ddd",
+            padding: 12,
+            marginTop: 12,
+            borderRadius: 6
           }}
         >
-          <select
-            value={item.labor_rate_id}
-            onChange={(e) =>
-              updateLaborItem(item.id, "labor_rate_id", e.target.value)
-            }
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns: "1.5fr 1fr 1fr 2fr auto",
+              marginTop: 8
+            }}
           >
-            <option value="">Select Labor Rate</option>
-            {laborRates.map((rate) => (
-              <option key={rate.id} value={rate.id}>
-                {rate.name} - ${money(rate.hourly_rate)}/hr
-              </option>
-            ))}
-          </select>
+            <select
+              value={item.labor_rate_id}
+              onChange={(e) =>
+                updateLaborItem(item.id, "labor_rate_id", e.target.value)
+              }
+            >
+              <option value="">Select Labor Rate</option>
+              {laborRates.map((rate) => (
+                <option key={rate.id} value={rate.id}>
+                  {rate.name} - ${money(rate.hourly_rate)}/hr
+                </option>
+              ))}
+            </select>
 
-          <input
-            type="number"
-            value={item.hours}
-            onChange={(e) => updateLaborItem(item.id, "hours", e.target.value)}
-            placeholder="Hours"
-          />
+            <input
+              type="number"
+              value={item.hours}
+              onChange={(e) => updateLaborItem(item.id, "hours", e.target.value)}
+              placeholder="Enter labor hours"
+            />
 
-          <input
-            type="number"
-            value={item.hourly_rate}
-            onChange={(e) =>
-              updateLaborItem(item.id, "hourly_rate", e.target.value)
-            }
-            placeholder="Rate Override"
-          />
+            <input
+              type="number"
+              value={item.hourly_rate}
+              onChange={(e) =>
+                updateLaborItem(item.id, "hourly_rate", e.target.value)
+              }
+              placeholder="Enter labor rate"
+            />
 
-          <input
-            value={item.description}
-            onChange={(e) =>
-              updateLaborItem(item.id, "description", e.target.value)
-            }
-            placeholder="Labor Description"
-          />
+            <input
+              value={item.description}
+              onChange={(e) =>
+                updateLaborItem(item.id, "description", e.target.value)
+              }
+              placeholder="Enter labor description"
+            />
 
-          <button type="button" onClick={() => removeLaborItem(item.id)}>
-            Remove
-          </button>
+            <button type="button" onClick={() => removeLaborItem(item.id)}>
+              Remove Labor
+            </button>
+          </div>
+
+          {/* --- ADDED START --- */}
+          <div style={{ marginTop: 10, marginLeft: 20 }}>
+            <button type="button" onClick={() => addPartToLabor(item.id)}>
+              Add Part To This Labor
+            </button>
+
+            {(item.parts || []).map((part) =>
+              renderPartInputs({
+                part,
+                onChange: (partId, field, value) =>
+                  updateLaborPartItem(item.id, partId, field, value),
+                onLookup: (partNumber) =>
+                  lookupPartByNumber(partNumber, {
+                    laborId: item.id,
+                    partId: part.id
+                  }),
+                onRemove: () => removeLaborPartItem(item.id, part.id)
+              })
+            )}
+          </div>
+          {/* --- ADDED END --- */}
         </div>
       ))}
 
       <hr />
 
-      <h3>Parts</h3>
+      <h3>Unassigned Parts</h3>
+      <p>
+        These are preserved from your original parts system. Use these only when
+        a part does not belong under a labor line.
+      </p>
 
       <button type="button" onClick={addPartItem}>
-        Add Part
+        Add Unassigned Part
       </button>
 
-      {partItems.map((item) => (
-        <div
-          key={item.id}
-          style={{
-            display: "grid",
-            gap: 8,
-            gridTemplateColumns: "1fr 1fr 1fr 1fr 2fr auto",
-            marginTop: 8
-          }}
-        >
-          <input
-            type="number"
-            value={item.cost}
-            onChange={(e) => updatePartItem(item.id, "cost", e.target.value)}
-            placeholder="Cost"
-          />
-
-          <input
-            type="number"
-            value={item.quantity}
-            onChange={(e) => updatePartItem(item.id, "quantity", e.target.value)}
-            placeholder="Qty"
-          />
-
-          <input
-            type="number"
-            value={item.markup_percent}
-            onChange={(e) =>
-              updatePartItem(item.id, "markup_percent", e.target.value)
-            }
-            placeholder="Markup %"
-          />
-
-          <input
-            type="number"
-            value={item.sale_price}
-            onChange={(e) =>
-              updatePartItem(item.id, "sale_price", e.target.value)
-            }
-            placeholder="Sale Price"
-          />
-
-          <input
-            value={item.description}
-            onChange={(e) =>
-              updatePartItem(item.id, "description", e.target.value)
-            }
-            placeholder="Part Description"
-          />
-
-          <button type="button" onClick={() => removePartItem(item.id)}>
-            Remove
-          </button>
-        </div>
-      ))}
+      {partItems.map((item) =>
+        renderPartInputs({
+          part: item,
+          onChange: updatePartItem,
+          onLookup: (partNumber) =>
+            lookupPartByNumber(partNumber, {
+              partId: item.id
+            }),
+          onRemove: () => removePartItem(item.id),
+          removeLabel: "Remove"
+        })
+      )}
 
       <hr />
 
@@ -1043,7 +1592,7 @@ function InvoiceManager({ user }) {
       <h2>Grand Total: ${money(grandTotal)}</h2>
 
       <button type="button" onClick={saveInvoice}>
-        Save Invoice
+        Save {invoice.document_status}
       </button>
 
       <button type="button" onClick={generatePdf} style={{ marginLeft: 10 }}>

@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "private": true,
   "homepage": ".",
   "dependencies": {
@@ -12,7 +12,9 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-scripts": "5.0.1",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7"
   },
   "scripts": {
     "start": "react-scripts start",
